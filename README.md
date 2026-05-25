@@ -24,7 +24,7 @@ If you prefer to compile the code yourself, make sure you have Go (1.21+) instal
 - **Windows / macOS**: No extra dependencies required.
 - **Linux**: Requires GTK3 and AppIndicator development headers.
   ```bash
-  sudo apt-get update && sudo apt-get install -y libgtk-3-dev libappindicator3-dev
+  sudo apt-get update && sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev
   ```
 
 **Build Commands:**
