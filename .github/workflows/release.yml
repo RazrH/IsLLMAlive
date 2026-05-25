@@ -20,18 +20,27 @@ jobs:
             artifact_name: isllmalive-windows-amd64.exe
             goos: windows
             goarch: amd64
+            cgo: 0
+          - os: windows-latest
+            artifact_name: isllmalive-windows-arm64.exe
+            goos: windows
+            goarch: arm64
+            cgo: 0
           - os: ubuntu-latest
             artifact_name: isllmalive-linux-amd64
             goos: linux
             goarch: amd64
+            cgo: 1
           - os: macos-latest
             artifact_name: isllmalive-macos-amd64
             goos: darwin
             goarch: amd64
+            cgo: 1
           - os: macos-latest
             artifact_name: isllmalive-macos-arm64
             goos: darwin
             goarch: arm64
+            cgo: 1
 
     steps:
       - name: Checkout code
@@ -50,8 +59,7 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-          # CGO_ENABLED=1 是 systray 在 Linux 和 macOS 下必须的
-          CGO_ENABLED: 1 
+          CGO_ENABLED: ${{ matrix.cgo }}
         run: |
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             # Windows: 增加 -H=windowsgui 隐藏控制台黑框
