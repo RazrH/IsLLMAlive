@@ -1,0 +1,64 @@
+package main
+
+import (
+	"fmt"
+	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
+
+	"isllmalive/internal/app"
+	"isllmalive/internal/config"
+	"isllmalive/internal/tray"
+)
+
+var (
+	appConfig  *config.Config
+	configPath string
+	mainApp    *app.App
+)
+
+func main() {
+	fmt.Println("Starting IsLLMAlive Phase 4...")
+
+	var err error
+	appConfig, err = config.Load()
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
+	}
+
+	exePath, _ := os.Executable()
+	configPath = filepath.Join(filepath.Dir(exePath), "config.json")
+	fmt.Printf("Loaded config from: %s\n", configPath)
+
+	mainApp = app.New(appConfig)
+
+	tray.Init(onReady, onExit)
+}
+
+func onReady() {
+	tray.SetupMenu(mainApp.PollAll, mainApp.ToggleNotify, onConfig, onExit)
+
+	fmt.Println("Tray UI initialized, starting polling...")
+	mainApp.Start()
+
+	// Start watching config.json for hot reloads
+	err := config.Watch(configPath, func() {
+		fmt.Println("Config file change detected. Reloading...")
+		mainApp.ReloadConfig()
+	})
+	if err != nil {
+		fmt.Printf("Warning: Failed to start config watcher: %v\n", err)
+	}
+}
+
+func onConfig() {
+	fmt.Println("Opening config:", configPath)
+	cmd := exec.Command("cmd", "/c", "start", configPath)
+	_ = cmd.Start()
+}
+
+func onExit() {
+	fmt.Println("Exiting...")
+}
+
