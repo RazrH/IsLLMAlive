@@ -7,6 +7,14 @@
 *.dll
 *.so
 *.dylib
+config.json
+
+# Built binaries
+isllmalive
+isllmalive.exe
+
+# Logs
+*.log
 
 # Test binary, built with `go test -c`
 *.test
@@ -28,5 +36,12 @@ go.work.sum
 .env
 
 # Editor/IDE
-# .idea/
-# .vscode/
+.idea/
+.vscode/
+
+# Plans
+plans/
+
+# Agents
+CONTEXT.md
+AGENTS.md

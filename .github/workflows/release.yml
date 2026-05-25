@@ -1,0 +1,84 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*' # 当推送形如 v1.0.0 的 tag 时自动触发
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: isllmalive-windows-amd64.exe
+            goos: windows
+            goarch: amd64
+          - os: ubuntu-latest
+            artifact_name: isllmalive-linux-amd64
+            goos: linux
+            goarch: amd64
+          - os: macos-latest
+            artifact_name: isllmalive-macos-amd64
+            goos: darwin
+            goarch: amd64
+          - os: macos-latest
+            artifact_name: isllmalive-macos-arm64
+            goos: darwin
+            goarch: arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22' # 保持与您本地兼容的 Go 版本
+
+      - name: Install Linux Dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libappindicator3-dev
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          # CGO_ENABLED=1 是 systray 在 Linux 和 macOS 下必须的
+          CGO_ENABLED: 1 
+        run: |
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            # Windows: 增加 -H=windowsgui 隐藏控制台黑框
+            go build -ldflags "-H=windowsgui -w -s" -o ${{ matrix.artifact_name }} ./cmd/isllmalive
+          else
+            # Linux/macOS: -w -s 压缩二进制体积
+            go build -ldflags "-w -s" -o ${{ matrix.artifact_name }} ./cmd/isllmalive
+          fi
+        shell: bash
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
