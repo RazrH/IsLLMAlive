@@ -62,11 +62,11 @@ jobs:
           CGO_ENABLED: ${{ matrix.cgo }}
         run: |
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            # Windows: 增加 -H=windowsgui 隐藏控制台黑框
-            go build -ldflags "-H=windowsgui -w -s" -o ${{ matrix.artifact_name }} ./cmd/isllmalive
+            # Windows: 增加 -H=windowsgui 隐藏控制台黑框 (去除了 -w -s 以降低 Windows Defender 误报率)
+            go build -ldflags "-H=windowsgui" -o ${{ matrix.artifact_name }} ./cmd/isllmalive
           else
-            # Linux/macOS: -w -s 压缩二进制体积
-            go build -ldflags "-w -s" -o ${{ matrix.artifact_name }} ./cmd/isllmalive
+            # Linux/macOS: 去除了 -w -s 保持多端编译参数统一
+            go build -o ${{ matrix.artifact_name }} ./cmd/isllmalive
           fi
         shell: bash
 
