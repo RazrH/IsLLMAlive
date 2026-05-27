@@ -27,12 +27,14 @@ type Provider interface {
 // NewProvider is a factory method to return the correct Provider based on type.
 func NewProvider(providerType string) Provider {
 	switch providerType {
+	case "openai":
+		return &OpenAIProvider{}
 	case "statuspage":
 		return &StatuspageProvider{}
 	case "google":
 		return &GoogleProvider{}
-	case "deepseek":
-		return &DeepSeekProvider{}
+	case "apiget":
+		return &ApiGetProvider{}
 	default:
 		// Unknown provider types currently return nil or could return a NoOpProvider
 		return nil

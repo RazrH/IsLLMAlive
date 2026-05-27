@@ -59,6 +59,9 @@ func (p *StatuspageProvider) Fetch(ctx context.Context, monitor config.MonitorCo
 			return result
 		}
 
+		req.Header.Set("User-Agent", "IsLLMAlive/1.0")
+		req.Header.Set("Accept", "application/json")
+
 		resp, err := client.Do(req)
 		if err == nil {
 			if resp.StatusCode == http.StatusOK {
@@ -68,7 +71,7 @@ func (p *StatuspageProvider) Fetch(ctx context.Context, monitor config.MonitorCo
 
 				if err == nil {
 					// Component level
-					if monitor.Component != "" {
+					if monitor.Component != "" && !strings.EqualFold(monitor.Component, "none") {
 						for _, comp := range summary.Components {
 							if strings.EqualFold(comp.Name, monitor.Component) {
 								result.Status = mapComponentStatus(comp.Status)
@@ -84,6 +87,21 @@ func (p *StatuspageProvider) Fetch(ctx context.Context, monitor config.MonitorCo
 					// Page level
 					result.Status = mapIndicator(summary.Status.Indicator)
 					result.Message = summary.Status.Description
+
+					// Fallback if indicator is missing or unrecognizable, but we have components
+					if result.Status == status.Unknown && len(summary.Components) > 0 {
+						worstStatus := status.Normal
+						for _, comp := range summary.Components {
+							s := mapComponentStatus(comp.Status)
+							if s > worstStatus {
+								worstStatus = s
+							}
+						}
+						result.Status = worstStatus
+						if result.Message == "" {
+							result.Message = "Inferred from components"
+						}
+					}
 					return result
 				} else {
 					lastMessage = "Parse error"

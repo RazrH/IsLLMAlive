@@ -76,10 +76,20 @@ Inside the `monitors` array, you can define multiple providers.
 
 | Field (字段) | Type | Required | Description (说明) |
 | :--- | :---: | :---: | :--- |
-| `type` | String | Yes | Provider API type. Supported: `statuspage` (for OpenAI, Anthropic), `google` (Vertex/Gemini), `deepseek`. |
+| `type` | String | Yes | Provider API type. Supported: `statuspage` (for Anthropic, kimi, etc.), `openai` (for OpenAI/Codex), `google` (Gemini), `apiget` (Deepseek, MiniMax, GLM). |
 | `name` | String | Yes | Display name for the tray menu and notifications. |
 | `enabled` | Bool | Yes | Set to `false` to completely pause polling for this provider. |
 | `notify_on` | Bool | Yes | Local notification switch. If `false`, this specific provider will never trigger notifications. |
 | `status_page` | String | No | The human-readable URL to open when clicking the item in the tray menu. |
-| `endpoint` | String | If `statuspage` | The API endpoint URL to fetch status from (e.g., `https://status.openai.com`). |
+| `endpoint` | String | If `statuspage` | The API endpoint URL to fetch status from (e.g., `https://status.claude.com`). |
 | `component` | String | No | Filter by specific component name (e.g., "API" or "ChatGPT"). If omitted, uses the overall page status. |
+
+#### Components (指定监控组件)
+*Note: Component not supported for apiget API providers due to technical reasons.*
+
+| Provider (供应商) | Components (组件) |
+| :--- | :--- |
+| OpenAI | `Responses`, `Fine-tuning`, `Images`, `Batch`, `Moderations`, `Embeddings`, `Files`, `Login`, `File uploads`, `CLI`, `FedRAMP`, `Compliance API`, `ChatGPT Atlas`, `Realtime`, `Sora`, `Conversations`, `Agent`, `Connectors/Apps`, `Codex API`, `Deep Research`, `Search`, `GPTs`, `Image Generation`, `Audio`, `VS Code extension`, `Voice mode`, `Codex Web`, `App`, `Chat Completions` |
+| Anthropic | `claude.ai`, `Claude Console (platform.claude.com)`, `Claude API (api.anthropic.com)`, `Claude Code`, `Claude Cowork`, `Claude for Government` |
+| Google | `api`, `multimodal live api`, `google ai studio` |
+| Kimi | `Kimi`, `Website`, `Open API`, `API Service`, `Open Platform Portal`, `SaaS`, `Sign In / Sign Up`, `File uploads`, `Search`, `Model`, `Vision Model`, `Thinking Model`, `Text Model`, `Research Model`, `K2 Model`, `Agentic Model` |
