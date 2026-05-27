@@ -178,7 +178,7 @@ func (p *GoogleProvider) parseData(rawData []interface{}, monitor config.Monitor
 	}
 
 	targetCompID := float64(-1)
-	if monitor.Component != "" {
+	if monitor.Component != "" && !strings.EqualFold(monitor.Component, "none") {
 		targetCompID = mapGoogleComponent(monitor.Component)
 		if targetCompID == -1 {
 			result.Status = status.Unknown

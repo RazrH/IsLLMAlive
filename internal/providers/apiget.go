@@ -4,18 +4,19 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"isllmalive/internal/config"
 	"isllmalive/internal/status"
 )
 
-// DeepSeekProvider implements the Provider interface for DeepSeek.
-// It directly probes the core API gateway to bypass aggressive WAFs on their status page.
-type DeepSeekProvider struct{}
+// ApiGetProvider implements a reusable Provider that directly probes a core API endpoint.
+// It bypasses aggressive WAFs on status pages by directly checking if the API returns 500/503.
+type ApiGetProvider struct{}
 
-// Fetch fetches the current status from DeepSeek.
-func (p *DeepSeekProvider) Fetch(ctx context.Context, monitor config.MonitorConfig) MonitorResult {
+// Fetch fetches the current status from the API.
+func (p *ApiGetProvider) Fetch(ctx context.Context, monitor config.MonitorConfig) MonitorResult {
 	client := &http.Client{Timeout: 10 * time.Second}
 
 	var lastErr error
@@ -52,9 +53,8 @@ func (p *DeepSeekProvider) Fetch(ctx context.Context, monitor config.MonitorConf
 }
 
 // attemptFetch performs a single core API probe attempt.
-func (p *DeepSeekProvider) attemptFetch(ctx context.Context, client *http.Client, monitor config.MonitorConfig) MonitorResult {
-	// Probe the core API instead of Flashduty to avoid Aliyun WAF TLS JA3 fingerprinting.
-	url := "https://api.deepseek.com/v1/models"
+func (p *ApiGetProvider) attemptFetch(ctx context.Context, client *http.Client, monitor config.MonitorConfig) MonitorResult {
+	url := strings.TrimRight(monitor.Endpoint, "/") + "/v1/models"
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
