@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 
 	"isllmalive/internal/app"
 	"isllmalive/internal/config"
