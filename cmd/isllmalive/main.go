@@ -54,7 +54,19 @@ func onReady() {
 
 func onConfig() {
 	fmt.Println("Opening config:", configPath)
-	cmd := exec.Command("cmd", "/c", "start", configPath)
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "linux":
+		cmd = exec.Command("xdg-open", configPath)
+	case "windows":
+		// Windows 'start' command interprets the first quoted string as a window title.
+		// By passing an empty string "", we prevent paths with spaces from opening a blank cmd.
+		cmd = exec.Command("cmd", "/c", "start", "", configPath)
+	case "darwin":
+		cmd = exec.Command("open", configPath)
+	default:
+		cmd = exec.Command("cmd", "/c", "start", "", configPath)
+	}
 	_ = cmd.Start()
 }
 
