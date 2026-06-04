@@ -38,7 +38,7 @@ func main() {
 }
 
 func onReady() {
-	tray.SetupMenu(mainApp.PollAll, mainApp.ToggleNotify, onConfig, onExit)
+	tray.SetupMenu(mainApp.PollAll, mainApp.ToggleNotify, onConfig, onDiagnostics, onExit)
 
 	fmt.Println("Tray UI initialized, starting polling...")
 	mainApp.Start()
@@ -55,18 +55,39 @@ func onReady() {
 
 func onConfig() {
 	fmt.Println("Opening config:", configPath)
+	openFile(configPath)
+}
+
+func onDiagnostics() {
+	exePath, err := os.Executable()
+	if err != nil {
+		fmt.Printf("Failed to resolve executable path for diagnostics: %v\n", err)
+		return
+	}
+
+	diagnosticsPath := filepath.Join(filepath.Dir(exePath), "diagnostics.txt")
+	if err := os.WriteFile(diagnosticsPath, []byte(mainApp.Diagnostics()), 0644); err != nil {
+		fmt.Printf("Failed to write diagnostics: %v\n", err)
+		return
+	}
+
+	fmt.Println("Opening diagnostics:", diagnosticsPath)
+	openFile(diagnosticsPath)
+}
+
+func openFile(path string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "linux":
-		cmd = exec.Command("xdg-open", configPath)
+		cmd = exec.Command("xdg-open", path)
 	case "windows":
 		// Windows 'start' command interprets the first quoted string as a window title.
 		// By passing an empty string "", we prevent paths with spaces from opening a blank cmd.
-		cmd = exec.Command("cmd", "/c", "start", "", configPath)
+		cmd = exec.Command("cmd", "/c", "start", "", path)
 	case "darwin":
-		cmd = exec.Command("open", configPath)
+		cmd = exec.Command("open", path)
 	default:
-		cmd = exec.Command("cmd", "/c", "start", "", configPath)
+		cmd = exec.Command("cmd", "/c", "start", "", path)
 	}
 	_ = cmd.Start()
 }
@@ -74,4 +95,3 @@ func onConfig() {
 func onExit() {
 	fmt.Println("Exiting...")
 }
-

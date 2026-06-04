@@ -58,12 +58,21 @@ func DefaultConfig() *Config {
 				Component:  "none",
 			},
 			{
-				Type:       "apiget",
+				Type:       "deepseek",
 				Name:       "DeepSeek",
 				Enabled:    true,
 				NotifyOn:   true,
-				Endpoint:   "https://api.deepseek.com",
+				Endpoint:   "https://status.deepseek.com/feed.rss",
 				StatusPage: "https://status.deepseek.com",
+				Component:  "none",
+			},
+			{
+				Type:       "apiget",
+				Name:       "Z.ai",
+				Enabled:    true,
+				NotifyOn:   true,
+				Endpoint:   "https://api.z.ai/api/paas/v4/chat/completions",
+				StatusPage: "https://z.ai",
 			},
 		},
 	}

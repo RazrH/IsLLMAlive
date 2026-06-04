@@ -12,6 +12,9 @@ import (
 type MonitorResult struct {
 	Key        string
 	Name       string
+	Type       string
+	Endpoint   string
+	Component  string
 	Status     status.Status
 	Message    string
 	CheckedAt  time.Time
@@ -33,6 +36,8 @@ func NewProvider(providerType string) Provider {
 		return &StatuspageProvider{}
 	case "google":
 		return &GoogleProvider{}
+	case "deepseek":
+		return &DeepSeekProvider{}
 	case "apiget":
 		return &ApiGetProvider{}
 	default:

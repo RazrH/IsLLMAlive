@@ -18,23 +18,23 @@ User guide by Gemini 3.1 pro (high).
 You can directly download the latest executable files for Windows, macOS, and Linux from the [GitHub Releases](../../releases) page. No additional installation is required.
 
 #### Option B: Build from Source (自行编译)
-If you prefer to compile the code yourself, make sure you have Go (1.21+) installed.
+If you prefer to compile the code yourself, make sure you have Go (1.24+) installed.
 
 **Dependencies:**
 - **Windows / macOS**: No extra dependencies required.
-- **Linux**: Requires GTK3 and AppIndicator development headers.
+- **Linux**: Requires pkg-config, GTK3, and AppIndicator development headers.
   ```bash
-  sudo apt-get update && sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev
+  sudo apt-get update && sudo apt-get install -y pkg-config libgtk-3-dev libayatana-appindicator3-dev
   ```
 
 **Build Commands:**
 - **Windows**: (Adds `-H=windowsgui` to hide the CMD window in the background)
   ```bash
-  go build -ldflags "-H=windowsgui -w -s" -o isllmalive.exe ./cmd/isllmalive
+  go build -trimpath -mod=readonly -ldflags "-s -w -H=windowsgui" -o isllmalive.exe ./cmd/isllmalive
   ```
 - **Linux / macOS**:
   ```bash
-  go build -ldflags "-w -s" -o isllmalive ./cmd/isllmalive
+  go build -trimpath -mod=readonly -ldflags "-s -w" -o isllmalive ./cmd/isllmalive
   ```
 
 ---
@@ -55,14 +55,17 @@ The system tray icon dynamically changes color based on the worst status among a
 
 ### 3. Usage & Operations (基本操作方法)
 - **Background Execution**: The app runs silently in the background with near-zero CPU and <10MB memory usage.
-- **Context Menu (右键菜单)**: Right-click the tray icon to view the status of each service individually, manually force a refresh, toggle system notifications, or open the configuration file.
+- **Context Menu (右键菜单)**: Right-click the tray icon to view the status of each service individually, manually force a refresh, toggle system notifications, open the configuration file, or open a diagnostics report.
 - **Hot Reload (热重载)**: Clicking "Open Config" will open `config.json`. Any changes saved to this file will be applied instantly without needing to restart the application.
+- **Diagnostics (诊断信息)**: Clicking "Open Diagnostics" writes `diagnostics.txt` next to the executable and opens it with the default editor. It includes each monitor's config, latest status, message, checked time, and underlying error.
 - **System Notifications (系统通知)**: When a service transitions between Normal and Degraded/Outage, a native desktop notification will be triggered. This can be globally turned off via the right-click menu, or disabled per-provider in `config.json`.
 
 ---
 
 ### 4. Configuration (配置指南)
 The `config.json` file is automatically generated in the same directory as the executable upon first launch. You can customize the behavior by editing it directly.
+
+The default monitors are OpenAI, Claude, Google AI, DeepSeek, and Z.ai. Existing `config.json` files are not overwritten automatically; delete or edit the file if you want newly added default monitors to appear.
 
 #### Global Settings (系统级字段)
 | Field (字段) | Type | Default | Description (说明) |
@@ -76,20 +79,31 @@ Inside the `monitors` array, you can define multiple providers.
 
 | Field (字段) | Type | Required | Description (说明) |
 | :--- | :---: | :---: | :--- |
-| `type` | String | Yes | Provider API type. Supported: `statuspage` (for Anthropic, kimi, etc.), `openai` (for OpenAI/Codex), `google` (Gemini), `apiget` (Deepseek, MiniMax, GLM). |
+| `type` | String | Yes | Provider API type. Supported: `statuspage` (for Anthropic, kimi, etc.), `openai` (for OpenAI/Codex), `google` (Gemini), `deepseek` (DeepSeek RSS), `apiget` (generic API probing, e.g. Z.ai, MiniMax, GLM). |
 | `name` | String | Yes | Display name for the tray menu and notifications. |
 | `enabled` | Bool | Yes | Set to `false` to completely pause polling for this provider. |
 | `notify_on` | Bool | Yes | Local notification switch. If `false`, this specific provider will never trigger notifications. |
 | `status_page` | String | No | The human-readable URL to open when clicking the item in the tray menu. |
-| `endpoint` | String | If `statuspage` | The API endpoint URL to fetch status from (e.g., `https://status.claude.com`). |
+| `endpoint` | String | Provider-specific | The endpoint URL to fetch status from. For `statuspage`, use the status page root; for `deepseek`, use the RSS feed; for `apiget`, use the API probe endpoint or base API host. |
 | `component` | String | No | Filter by specific component name (e.g., "API" or "ChatGPT"). If omitted, uses the overall page status. |
 
 #### Components (指定监控组件)
-*Note: Component not supported for apiget API providers due to technical reasons.*
+*Note: Component is not supported for `apiget` API providers due to technical reasons.*
 
 | Provider (供应商) | Components (组件) |
 | :--- | :--- |
 | OpenAI | `Responses`, `Fine-tuning`, `Images`, `Batch`, `Moderations`, `Embeddings`, `Files`, `Login`, `File uploads`, `CLI`, `FedRAMP`, `Compliance API`, `ChatGPT Atlas`, `Realtime`, `Sora`, `Conversations`, `Agent`, `Connectors/Apps`, `Codex API`, `Deep Research`, `Search`, `GPTs`, `Image Generation`, `Audio`, `VS Code extension`, `Voice mode`, `Codex Web`, `App`, `Chat Completions` |
 | Anthropic | `claude.ai`, `Claude Console (platform.claude.com)`, `Claude API (api.anthropic.com)`, `Claude Code`, `Claude Cowork`, `Claude for Government` |
 | Google | `api`, `multimodal live api`, `google ai studio` |
+| DeepSeek | `API Service`, `Web Chat Service` |
 | Kimi | `Kimi`, `Website`, `Open API`, `API Service`, `Open Platform Portal`, `SaaS`, `Sign In / Sign Up`, `File uploads`, `Search`, `Model`, `Vision Model`, `Thinking Model`, `Text Model`, `Research Model`, `K2 Model`, `Agentic Model` |
+
+#### DeepSeek Provider Notes
+The `deepseek` provider uses `https://status.deepseek.com/feed.rss` as the preferred source. If the standard Go HTTP client is disconnected by the status host, it retries the RSS request with a Chrome-like uTLS fingerprint. If RSS is still unavailable, it falls back to direct service probes:
+
+| Component | Fallback probe |
+| :--- | :--- |
+| `API Service` | `https://api.deepseek.com/v1/models` |
+| `Web Chat Service` | `https://chat.deepseek.com` |
+
+The direct fallback can infer `Normal`, `Outage`, or `Unknown`, but cannot reliably infer `Degraded`; RSS remains the preferred source when available.

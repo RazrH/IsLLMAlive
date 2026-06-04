@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -24,7 +25,7 @@ func (p *ApiGetProvider) Fetch(ctx context.Context, monitor config.MonitorConfig
 	for attempt := 1; attempt <= 3; attempt++ {
 		select {
 		case <-ctx.Done():
-			return MonitorResult{Status: status.Unknown, Err: ctx.Err(), Name: monitor.Name}
+			return MonitorResult{Status: status.Unknown, Message: "Context cancelled", Err: ctx.Err(), Name: monitor.Name}
 		default:
 		}
 
@@ -40,44 +41,55 @@ func (p *ApiGetProvider) Fetch(ctx context.Context, monitor config.MonitorConfig
 			select {
 			case <-time.After(backoff):
 			case <-ctx.Done():
-				return MonitorResult{Status: status.Unknown, Err: ctx.Err(), Name: monitor.Name}
+				return MonitorResult{Status: status.Unknown, Message: "Context cancelled", Err: ctx.Err(), Name: monitor.Name}
 			}
 		}
 	}
 
 	return MonitorResult{
-		Status: status.Unknown,
-		Err:    fmt.Errorf("failed after 3 attempts, last error: %w", lastErr),
-		Name:   monitor.Name,
+		Status:  status.Unknown,
+		Message: "Probe failed after 3 attempts",
+		Err:     fmt.Errorf("failed after 3 attempts, last error: %w", lastErr),
+		Name:    monitor.Name,
 	}
 }
 
 // attemptFetch performs a single core API probe attempt.
 func (p *ApiGetProvider) attemptFetch(ctx context.Context, client *http.Client, monitor config.MonitorConfig) MonitorResult {
-	url := strings.TrimRight(monitor.Endpoint, "/") + "/v1/models"
+	probeURL := apiGetProbeURL(monitor.Endpoint)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
 	if err != nil {
-		return MonitorResult{Status: status.Unknown, Err: err, Name: monitor.Name}
+		return MonitorResult{Status: status.Unknown, Message: "Failed to create request for " + probeURL, Err: err, Name: monitor.Name}
 	}
-	
+
 	req.Header.Set("User-Agent", "IsLLMAlive-Monitor/1.0")
 
 	resp, err := client.Do(req)
 	if err != nil {
 		// Connection issues, DNS failures, etc.
-		return MonitorResult{Status: status.Unknown, Err: err, Name: monitor.Name}
+		return MonitorResult{Status: status.Unknown, Message: "Network error probing " + probeURL, Err: err, Name: monitor.Name}
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 500 {
 		return MonitorResult{
-			Status: status.Outage,
-			Err:    fmt.Errorf("core API returned server error: %d", resp.StatusCode),
-			Name:   monitor.Name,
+			Status:  status.Outage,
+			Message: fmt.Sprintf("Server error probing %s", probeURL),
+			Err:     fmt.Errorf("core API returned server error: %d", resp.StatusCode),
+			Name:    monitor.Name,
 		}
 	}
 
 	// 401 Unauthorized, 429 Too Many Requests, or 200 OK all indicate the API gateway is alive and responding perfectly.
-	return MonitorResult{Status: status.Normal, Err: nil, Name: monitor.Name}
+	return MonitorResult{Status: status.Normal, Message: fmt.Sprintf("Probe returned HTTP %d", resp.StatusCode), Err: nil, Name: monitor.Name}
+}
+
+func apiGetProbeURL(endpoint string) string {
+	trimmed := strings.TrimRight(strings.TrimSpace(endpoint), "/")
+	parsed, err := url.Parse(trimmed)
+	if err == nil && parsed.Path != "" && parsed.Path != "/" {
+		return trimmed
+	}
+	return trimmed + "/v1/models"
 }
