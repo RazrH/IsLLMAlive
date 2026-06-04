@@ -64,7 +64,7 @@ func (p *GoogleProvider) fetchAPIKey(ctx context.Context, client *http.Client) (
 		p.cachedAPIKey = matches[1]
 		return p.cachedAPIKey, nil
 	}
-	
+
 	// Fallback to first AIza key
 	allKeys := regexp.MustCompile(`AIza[0-9A-Za-z-_]+`).FindAllString(html, -1)
 	if len(allKeys) > 1 {
@@ -80,10 +80,11 @@ func (p *GoogleProvider) fetchAPIKey(ctx context.Context, client *http.Client) (
 
 func (p *GoogleProvider) Fetch(ctx context.Context, monitor config.MonitorConfig) MonitorResult {
 	result := MonitorResult{
-		Key:       monitor.Name,
-		Name:      monitor.Name,
-		Status:    status.Unknown,
-		CheckedAt: time.Now(),
+		Key:        monitor.Name,
+		Name:       monitor.Name,
+		Status:     status.Unknown,
+		CheckedAt:  time.Now(),
+		StatusPage: "https://aistudio.google.com/status",
 	}
 
 	endpoint := "https://alkalimakersuite-pa.clients6.google.com/$rpc/google.internal.alkali.applications.makersuite.v1.MakerSuiteService/ListIncidentsHistory"

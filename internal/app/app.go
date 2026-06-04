@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,10 +16,11 @@ import (
 
 // App orchestrates the monitoring flow between Config, Providers, and Tray.
 type App struct {
-	cfg        *config.Config
-	mu         sync.Mutex
-	cancel     context.CancelFunc
-	lastStatus map[string]status.Status
+	cfg         *config.Config
+	mu          sync.Mutex
+	cancel      context.CancelFunc
+	lastStatus  map[string]status.Status
+	lastResults []providers.MonitorResult
 }
 
 // New creates a new App instance.
@@ -61,7 +63,7 @@ func (a *App) startPolling() {
 	ticker := time.NewTicker(time.Duration(interval) * time.Minute)
 
 	// Trigger first poll
-	go a.pollAllLocked()
+	go a.PollAll()
 
 	go func() {
 		for {
@@ -125,7 +127,7 @@ func (a *App) PollAll() {
 // pollAllLocked concurrently fetches the status for all enabled monitors.
 func (a *App) pollAllLocked() {
 	var wg sync.WaitGroup
-	
+
 	// Create a slice with the exact length of configured monitors to preserve ordering
 	results := make([]providers.MonitorResult, len(a.cfg.Monitors))
 
@@ -145,24 +147,28 @@ func (a *App) pollAllLocked() {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			res := p.Fetch(ctx, monitor)
-			res.StatusPage = monitor.StatusPage // Inject status page URL
+			res.Type = monitor.Type
+			res.Endpoint = monitor.Endpoint
+			res.Component = monitor.Component
+			res.StatusPage = resolveStatusPage(monitor, res.StatusPage)
 
 			results[idx] = res
 		}(i, m, prov)
 	}
 
 	wg.Wait()
-	
+	a.lastResults = append(a.lastResults[:0], results...)
+
 	// Filter out empty results (from disabled or unknown providers)
 	var finalResults []providers.MonitorResult
 	for i, res := range results {
 		if res.Name != "" {
 			finalResults = append(finalResults, res)
-			
+
 			// Notification Logic
 			monitor := a.cfg.Monitors[i]
 			prev, exists := a.lastStatus[res.Key]
-			
+
 			// Unknown and Normal are treated equally in cross-level checks
 			effPrev := prev
 			if effPrev == status.Unknown {
@@ -178,7 +184,7 @@ func (a *App) pollAllLocked() {
 				if a.cfg.GlobalNotifyOn && monitor.NotifyOn {
 					title := fmt.Sprintf("IsLLMAlive: %s", res.Name)
 					var message string
-					
+
 					isZh := false
 					if len(a.cfg.Language) >= 2 && (a.cfg.Language[:2] == "zh" || a.cfg.Language[:2] == "Zh") {
 						isZh = true
@@ -215,7 +221,7 @@ func (a *App) pollAllLocked() {
 					} else {
 						message = fmt.Sprintf("Status: %s", statusStr)
 					}
-					
+
 					_ = notify.Send(title, message)
 				}
 			}
@@ -224,9 +230,64 @@ func (a *App) pollAllLocked() {
 			a.lastStatus[res.Key] = res.Status
 		}
 	}
-	
+
 	// tray.Update() handles showing/hiding dynamically, so we don't need to recreate the menu.
 	tray.Update(finalResults, a.cfg.Language)
+}
+
+func resolveStatusPage(monitor config.MonitorConfig, providerStatusPage string) string {
+	if monitor.StatusPage != "" {
+		return monitor.StatusPage
+	}
+	return providerStatusPage
+}
+
+// Diagnostics returns a text snapshot of the current config and latest poll results.
+func (a *App) Diagnostics() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "IsLLMAlive diagnostics\n")
+	fmt.Fprintf(&b, "Generated: %s\n", time.Now().Format(time.RFC3339))
+	fmt.Fprintf(&b, "Language: %s\n", a.cfg.Language)
+	fmt.Fprintf(&b, "Refresh interval minutes: %d\n", a.cfg.RefreshIntervalMinutes)
+	fmt.Fprintf(&b, "Global notifications: %t\n", a.cfg.GlobalNotifyOn)
+	fmt.Fprintf(&b, "\n")
+
+	for i, monitor := range a.cfg.Monitors {
+		fmt.Fprintf(&b, "Monitor %d\n", i+1)
+		fmt.Fprintf(&b, "  config.name: %s\n", monitor.Name)
+		fmt.Fprintf(&b, "  config.type: %s\n", monitor.Type)
+		fmt.Fprintf(&b, "  config.enabled: %t\n", monitor.Enabled)
+		fmt.Fprintf(&b, "  config.endpoint: %s\n", monitor.Endpoint)
+		fmt.Fprintf(&b, "  config.component: %s\n", monitor.Component)
+		fmt.Fprintf(&b, "  config.status_page: %s\n", monitor.StatusPage)
+		fmt.Fprintf(&b, "  config.notify_on: %t\n", monitor.NotifyOn)
+
+		if i >= len(a.lastResults) || a.lastResults[i].Name == "" {
+			fmt.Fprintf(&b, "  result: no latest result\n\n")
+			continue
+		}
+
+		res := a.lastResults[i]
+		fmt.Fprintf(&b, "  result.name: %s\n", res.Name)
+		fmt.Fprintf(&b, "  result.type: %s\n", res.Type)
+		fmt.Fprintf(&b, "  result.endpoint: %s\n", res.Endpoint)
+		fmt.Fprintf(&b, "  result.component: %s\n", res.Component)
+		fmt.Fprintf(&b, "  result.status: %s\n", res.Status)
+		fmt.Fprintf(&b, "  result.message: %s\n", res.Message)
+		fmt.Fprintf(&b, "  result.checked_at: %s\n", res.CheckedAt.Format(time.RFC3339))
+		fmt.Fprintf(&b, "  result.status_page: %s\n", res.StatusPage)
+		if res.Err != nil {
+			fmt.Fprintf(&b, "  result.error: %v\n", res.Err)
+		} else {
+			fmt.Fprintf(&b, "  result.error: <nil>\n")
+		}
+		fmt.Fprintf(&b, "\n")
+	}
+
+	return b.String()
 }
 
 // ToggleNotify flips the global notification toggle and saves the config.

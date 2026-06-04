@@ -13,17 +13,19 @@ import (
 )
 
 var (
-	monitorItems []*systray.MenuItem
-	monitorUrls  = make([]string, 20) // store URLs for the 20 slots
+	monitorItems    []*systray.MenuItem
+	monitorUrls     = make([]string, 20) // store URLs for the 20 slots
 	btnRefresh      *systray.MenuItem
 	btnToggleNotify *systray.MenuItem
 	btnConfig       *systray.MenuItem
+	btnDiagnostics  *systray.MenuItem
 	btnQuit         *systray.MenuItem
 
 	// Callbacks to main app
 	OnRefresh      func()
 	OnToggleNotify func()
 	OnConfig       func()
+	OnDiagnostics  func()
 	OnQuit         func()
 )
 
@@ -33,10 +35,11 @@ func Init(onReady, onExit func()) {
 }
 
 // SetupMenu initializes the static parts of the tray menu.
-func SetupMenu(onRefresh, onToggleNotify, onConfig, onQuit func()) {
+func SetupMenu(onRefresh, onToggleNotify, onConfig, onDiagnostics, onQuit func()) {
 	OnRefresh = onRefresh
 	OnToggleNotify = onToggleNotify
 	OnConfig = onConfig
+	OnDiagnostics = onDiagnostics
 	OnQuit = onQuit
 
 	for i := 0; i < 20; i++ {
@@ -59,6 +62,7 @@ func SetupMenu(onRefresh, onToggleNotify, onConfig, onQuit func()) {
 	btnRefresh = systray.AddMenuItem("Refresh Now", "Manual Update")
 	btnToggleNotify = systray.AddMenuItem("🔔 Notifications: On", "Toggle Notifications")
 	btnConfig = systray.AddMenuItem("Open Config", "Open Config")
+	btnDiagnostics = systray.AddMenuItem("Open Diagnostics", "Open Diagnostics")
 	systray.AddSeparator()
 	btnQuit = systray.AddMenuItem("Quit", "Quit")
 
@@ -76,6 +80,10 @@ func SetupMenu(onRefresh, onToggleNotify, onConfig, onQuit func()) {
 			case <-btnConfig.ClickedCh:
 				if OnConfig != nil {
 					OnConfig()
+				}
+			case <-btnDiagnostics.ClickedCh:
+				if OnDiagnostics != nil {
+					OnDiagnostics()
 				}
 			case <-btnQuit.ClickedCh:
 				if OnQuit != nil {
@@ -113,10 +121,12 @@ func TranslateMenu(lang string) {
 	if strings.ToLower(lang) == "zh-cn" {
 		btnRefresh.SetTitle("立即刷新")
 		btnConfig.SetTitle("打开配置文件")
+		btnDiagnostics.SetTitle("打开诊断信息")
 		btnQuit.SetTitle("退出")
 	} else {
 		btnRefresh.SetTitle("Refresh Now")
 		btnConfig.SetTitle("Open Config")
+		btnDiagnostics.SetTitle("Open Diagnostics")
 		btnQuit.SetTitle("Quit")
 	}
 }
@@ -186,12 +196,7 @@ func Update(results []providers.MonitorResult, lang string) {
 	var anomalyMsgs []string
 	for _, res := range results {
 		if res.Status != status.Normal {
-			// Show name and reason (Message)
-			msg := res.Message
-			if msg == "" {
-				msg = translateStatus(res.Status, lang)
-			}
-			anomalyMsgs = append(anomalyMsgs, fmt.Sprintf("%s: %s", res.Name, msg))
+			anomalyMsgs = append(anomalyMsgs, fmt.Sprintf("%s: %s", res.Name, monitorDetail(res, lang)))
 		}
 	}
 
@@ -218,11 +223,57 @@ func Update(results []providers.MonitorResult, lang string) {
 				emoji = "❌" // Outage
 			}
 			item.SetTitle(fmt.Sprintf("%s %s: %s", emoji, res.Name, translateStatus(res.Status, lang)))
+			item.SetTooltip(monitorTooltip(res, lang))
 			monitorUrls[i] = res.StatusPage
 			item.Show()
 		} else {
+			item.SetTooltip("")
 			monitorUrls[i] = ""
 			item.Hide()
 		}
 	}
+}
+
+func monitorDetail(res providers.MonitorResult, lang string) string {
+	detail := res.Message
+	if detail == "" {
+		detail = translateStatus(res.Status, lang)
+	}
+	if res.Err != nil {
+		errText := res.Err.Error()
+		if detail == "" {
+			detail = errText
+		} else if !strings.Contains(detail, errText) {
+			detail = fmt.Sprintf("%s (%s)", detail, errText)
+		}
+	}
+	return detail
+}
+
+func monitorTooltip(res providers.MonitorResult, lang string) string {
+	lines := []string{
+		res.Name,
+		fmt.Sprintf("Status: %s", translateStatus(res.Status, lang)),
+	}
+	if res.Type != "" {
+		lines = append(lines, "Type: "+res.Type)
+	}
+	if res.Endpoint != "" {
+		lines = append(lines, "Endpoint: "+res.Endpoint)
+	}
+	if res.Component != "" {
+		lines = append(lines, "Component: "+res.Component)
+	}
+	if detail := monitorDetail(res, lang); detail != "" {
+		lines = append(lines, "Detail: "+detail)
+	}
+	if res.CheckedAt.IsZero() {
+		lines = append(lines, "Checked: unknown")
+	} else {
+		lines = append(lines, "Checked: "+res.CheckedAt.Format("2006-01-02 15:04:05 MST"))
+	}
+	if res.StatusPage != "" {
+		lines = append(lines, "Status page: "+res.StatusPage)
+	}
+	return strings.Join(lines, "\n")
 }
