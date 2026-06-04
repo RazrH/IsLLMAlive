@@ -125,7 +125,7 @@ func (a *App) PollAll() {
 // pollAllLocked concurrently fetches the status for all enabled monitors.
 func (a *App) pollAllLocked() {
 	var wg sync.WaitGroup
-	
+
 	// Create a slice with the exact length of configured monitors to preserve ordering
 	results := make([]providers.MonitorResult, len(a.cfg.Monitors))
 
@@ -145,24 +145,24 @@ func (a *App) pollAllLocked() {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			res := p.Fetch(ctx, monitor)
-			res.StatusPage = monitor.StatusPage // Inject status page URL
+			res.StatusPage = resolveStatusPage(monitor, res.StatusPage)
 
 			results[idx] = res
 		}(i, m, prov)
 	}
 
 	wg.Wait()
-	
+
 	// Filter out empty results (from disabled or unknown providers)
 	var finalResults []providers.MonitorResult
 	for i, res := range results {
 		if res.Name != "" {
 			finalResults = append(finalResults, res)
-			
+
 			// Notification Logic
 			monitor := a.cfg.Monitors[i]
 			prev, exists := a.lastStatus[res.Key]
-			
+
 			// Unknown and Normal are treated equally in cross-level checks
 			effPrev := prev
 			if effPrev == status.Unknown {
@@ -178,7 +178,7 @@ func (a *App) pollAllLocked() {
 				if a.cfg.GlobalNotifyOn && monitor.NotifyOn {
 					title := fmt.Sprintf("IsLLMAlive: %s", res.Name)
 					var message string
-					
+
 					isZh := false
 					if len(a.cfg.Language) >= 2 && (a.cfg.Language[:2] == "zh" || a.cfg.Language[:2] == "Zh") {
 						isZh = true
@@ -215,7 +215,7 @@ func (a *App) pollAllLocked() {
 					} else {
 						message = fmt.Sprintf("Status: %s", statusStr)
 					}
-					
+
 					_ = notify.Send(title, message)
 				}
 			}
@@ -224,9 +224,16 @@ func (a *App) pollAllLocked() {
 			a.lastStatus[res.Key] = res.Status
 		}
 	}
-	
+
 	// tray.Update() handles showing/hiding dynamically, so we don't need to recreate the menu.
 	tray.Update(finalResults, a.cfg.Language)
+}
+
+func resolveStatusPage(monitor config.MonitorConfig, providerStatusPage string) string {
+	if monitor.StatusPage != "" {
+		return monitor.StatusPage
+	}
+	return providerStatusPage
 }
 
 // ToggleNotify flips the global notification toggle and saves the config.

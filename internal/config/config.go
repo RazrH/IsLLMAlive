@@ -33,11 +33,12 @@ func DefaultConfig() *Config {
 		GlobalNotifyOn:         true,
 		Monitors: []MonitorConfig{
 			{
-				Type:      "openai",
-				Name:      "OpenAI",
-				Enabled:   true,
-				NotifyOn:  true,
-				Component: "none",
+				Type:       "openai",
+				Name:       "OpenAI",
+				Enabled:    true,
+				NotifyOn:   true,
+				StatusPage: "https://status.openai.com",
+				Component:  "none",
 			},
 			{
 				Type:       "statuspage",
@@ -49,11 +50,12 @@ func DefaultConfig() *Config {
 				Component:  "none",
 			},
 			{
-				Type:      "google",
-				Name:      "Google AI",
-				Enabled:   true,
-				NotifyOn:  true,
-				Component: "none",
+				Type:       "google",
+				Name:       "Google AI",
+				Enabled:    true,
+				NotifyOn:   true,
+				StatusPage: "https://aistudio.google.com/status",
+				Component:  "none",
 			},
 			{
 				Type:       "apiget",
