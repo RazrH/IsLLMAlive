@@ -17,12 +17,14 @@ type OpenAIProvider struct{}
 
 var openAIEndpoint = "https://status.openai.com/proxy/status.openai.com"
 
+type oaiComponent struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 type oaiProxyResponse struct {
 	Summary struct {
-		Components []struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
-		} `json:"components"`
+		Components         []oaiComponent `json:"components"`
 		AffectedComponents []struct {
 			ComponentID string `json:"component_id"`
 			Status      string `json:"status"`
@@ -30,6 +32,17 @@ type oaiProxyResponse struct {
 		OngoingIncidents []struct {
 			Status string `json:"status"`
 		} `json:"ongoing_incidents"`
+		Structure struct {
+			Items []struct {
+				Group struct {
+					Name       string `json:"name"`
+					Components []struct {
+						ComponentID string `json:"component_id"`
+						Name        string `json:"name"`
+					} `json:"components"`
+				} `json:"group"`
+			} `json:"items"`
+		} `json:"structure"`
 	} `json:"summary"`
 }
 
@@ -74,28 +87,7 @@ func (p *OpenAIProvider) Fetch(ctx context.Context, monitor config.MonitorConfig
 
 					// Component level
 					if componentNames := monitor.ComponentNames(); len(componentNames) > 0 {
-						componentStatuses := make([]ComponentStatus, 0, len(componentNames))
-						var missing []string
-						for _, name := range componentNames {
-							found := false
-							for _, comp := range proxyResp.Summary.Components {
-								if !strings.EqualFold(comp.Name, name) {
-									continue
-								}
-								componentStatus := ComponentStatus{Name: name, Status: status.Normal, Message: "operational"}
-								if rawStatus, affected := affectedMap[comp.ID]; affected {
-									componentStatus.Status = mapOAIStatus(rawStatus)
-									componentStatus.Message = rawStatus
-								}
-								componentStatuses = append(componentStatuses, componentStatus)
-								found = true
-								break
-							}
-							if !found {
-								componentStatuses = append(componentStatuses, ComponentStatus{Name: name, Status: status.Unknown, Message: "Component not found"})
-								missing = append(missing, name)
-							}
-						}
+						componentStatuses, missing := resolveOAIComponentStatuses(proxyResp, componentNames, affectedMap)
 						result = aggregateComponentStatuses(result, componentStatuses)
 						if len(missing) > 0 {
 							result.Err = fmt.Errorf("components not found: %s", strings.Join(missing, ", "))
@@ -172,6 +164,79 @@ func (p *OpenAIProvider) Fetch(ctx context.Context, monitor config.MonitorConfig
 	result.Message = lastMessage
 	result.Err = lastErr
 	return result
+}
+
+func resolveOAIComponentStatuses(proxyResp oaiProxyResponse, selections []string, affectedMap map[string]string) ([]ComponentStatus, []string) {
+	byName := make(map[string][]oaiComponent)
+	for _, component := range proxyResp.Summary.Components {
+		key := strings.ToLower(strings.TrimSpace(component.Name))
+		byName[key] = append(byName[key], component)
+	}
+
+	byQualifiedName := make(map[string]oaiComponent)
+	groupByID := make(map[string]string)
+	for _, item := range proxyResp.Summary.Structure.Items {
+		for _, component := range item.Group.Components {
+			qualifiedName := item.Group.Name + "/" + component.Name
+			byQualifiedName[normalizeOAIComponentName(qualifiedName)] = oaiComponent{ID: component.ComponentID, Name: component.Name}
+			groupByID[component.ComponentID] = item.Group.Name
+		}
+	}
+
+	componentStatuses := make([]ComponentStatus, 0, len(selections))
+	var missing []string
+	for _, selection := range selections {
+		matches := byName[strings.ToLower(strings.TrimSpace(selection))]
+		if len(matches) == 0 {
+			if component, found := byQualifiedName[normalizeOAIComponentName(selection)]; found {
+				matches = []oaiComponent{component}
+			}
+		}
+		if len(matches) == 0 {
+			componentStatuses = append(componentStatuses, ComponentStatus{Name: selection, Status: status.Unknown, Message: "Component not found"})
+			missing = append(missing, selection)
+			continue
+		}
+		componentStatuses = append(componentStatuses, evaluateOAIComponents(selection, matches, affectedMap, groupByID))
+	}
+	return componentStatuses, missing
+}
+
+func normalizeOAIComponentName(name string) string {
+	parts := strings.SplitN(name, "/", 2)
+	if len(parts) == 2 {
+		return strings.ToLower(strings.TrimSpace(parts[0]) + "/" + strings.TrimSpace(parts[1]))
+	}
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+func evaluateOAIComponents(selection string, components []oaiComponent, affectedMap map[string]string, groupByID map[string]string) ComponentStatus {
+	worstStatus := status.Unknown
+	var abnormal []string
+	message := "operational"
+	for i, component := range components {
+		componentStatus := status.Normal
+		componentMessage := "operational"
+		if rawStatus, affected := affectedMap[component.ID]; affected {
+			componentStatus = mapOAIStatus(rawStatus)
+			componentMessage = rawStatus
+		}
+		if i == 0 || componentStatus > worstStatus {
+			worstStatus = componentStatus
+			message = componentMessage
+		}
+		if len(components) > 1 && componentStatus != status.Normal {
+			name := component.Name
+			if group := groupByID[component.ID]; group != "" {
+				name = group + "/" + component.Name
+			}
+			abnormal = append(abnormal, name+": "+componentMessage)
+		}
+	}
+	if len(abnormal) > 0 {
+		message = strings.Join(abnormal, "; ")
+	}
+	return ComponentStatus{Name: selection, Status: worstStatus, Message: message}
 }
 
 func mapOAIStatus(oaiStatusStr string) status.Status {

@@ -114,14 +114,26 @@ go build -o isllmalive.exe ./cmd/isllmalive
 
 | Provider | 组件 |
 | --- | --- |
-| OpenAI (`openai`) | `Batch`, `Audio`, `Login`, `Compliance API`, `Embeddings`, `Moderations`, `Files`, `Conversations`, `ChatGPT Work`, `Codex in ChatGPT Desktop`, `Agent`, `Sites`, `Codex API`, `VS Code extension`, `FedRAMP`, `Ads Manager`, `Search`, `GPTs`, `Image Generation`, `ChatGPT Atlas`, `Connectors/Apps`, `Ads API`, `Fine-tuning`, `Responses`, `Realtime`, `Sora`, `Voice mode`, `Deep Research`, `Images`, `Codex Web`, `File uploads`, `Chat Completions`, `CLI` |
+| OpenAI (`openai`) | 见下方按官方状态页分组的推荐配置值。 |
 | Anthropic (`statuspage`) | `claude.ai`, `Claude Console (platform.claude.com)`, `Claude API (api.anthropic.com)`, `Claude Code`, `Claude Cowork`, `Claude for Government` |
 | Google (`google`) | `api`, `multimodal live api`, `google ai studio` |
 | DeepSeek (`deepseek`) | `API Service`, `Web Chat Service` |
 | Kimi (`statuspage`) | `Kimi`, `Website`, `Open API`, `API Service`, `Open Platform Portal`, `SaaS`, `Sign In / Sign Up`, `File uploads`, `Search`, `Model`, `Vision Model`, `Thinking Model`, `Text Model`, `Research Model`, `K2 Model`, `Agentic Model` |
 | Minimax (`statuspage`) | `Large Language Models (LLM)`, `Text-to-Speech`, `Video Generation`, `Music Generation` |
 
-OpenAI 组件名称于 2026-07-10 从 [OpenAI 官方状态代理 JSON](https://status.openai.com/proxy/status.openai.com) 核对；配置按名称而非 ID 匹配，远端列表后续可能继续变化。
+#### OpenAI 组件
+
+OpenAI 支持 `分组/组件` 限定名，但唯一组件推荐直接写组件名。两个 `Login` 推荐分别写为 `APIs/Login` 或 `ChatGPT/Login`；未限定的 `Login` 会聚合两者的最差状态。例如 `Codex/Codex API` 受支持，但推荐简写为 `Codex API`。
+
+| 官方分组 | `components` 推荐配置值 |
+| --- | --- |
+| APIs | `Chat Completions`, `Responses`, `Fine-tuning`, `Embeddings`, `Images`, `Batch`, `Audio`, `Moderations`, `Realtime`, `Files`, `APIs/Login`, `Sora` |
+| ChatGPT | `Conversations`, `ChatGPT/Login`, `ChatGPT Work`, `Codex in ChatGPT Desktop`, `Compliance API`, `Search`, `File uploads`, `Voice mode`, `GPTs`, `Image Generation`, `Deep Research`, `Agent`, `ChatGPT Atlas`, `Sites`, `Connectors/Apps` |
+| Codex | `Codex Web`, `Codex API`, `CLI`, `VS Code extension` |
+| FedRAMP | `FedRAMP` |
+| Ads Platform | `Ads Manager`, `Ads API` |
+
+OpenAI 分组和组件名称于 2026-07-10 从 [OpenAI 官方状态代理 JSON](https://status.openai.com/proxy/status.openai.com) 的 `summary.structure` 核对；配置按名称而非 ID 匹配，远端列表后续可能继续变化。
 
 ### DeepSeek 说明
 
@@ -245,14 +257,26 @@ Component filtering is not supported for `apiget` monitors.
 
 | Provider | Components |
 | --- | --- |
-| OpenAI (`openai`) | `Batch`, `Audio`, `Login`, `Compliance API`, `Embeddings`, `Moderations`, `Files`, `Conversations`, `ChatGPT Work`, `Codex in ChatGPT Desktop`, `Agent`, `Sites`, `Codex API`, `VS Code extension`, `FedRAMP`, `Ads Manager`, `Search`, `GPTs`, `Image Generation`, `ChatGPT Atlas`, `Connectors/Apps`, `Ads API`, `Fine-tuning`, `Responses`, `Realtime`, `Sora`, `Voice mode`, `Deep Research`, `Images`, `Codex Web`, `File uploads`, `Chat Completions`, `CLI` |
+| OpenAI (`openai`) | See the recommended values grouped by the official status page below. |
 | Anthropic (`statuspage`) | `claude.ai`, `Claude Console (platform.claude.com)`, `Claude API (api.anthropic.com)`, `Claude Code`, `Claude Cowork`, `Claude for Government` |
 | Google (`google`) | `api`, `multimodal live api`, `google ai studio` |
 | DeepSeek (`deepseek`) | `API Service`, `Web Chat Service` |
 | Kimi (`statuspage`) | `Kimi`, `Website`, `Open API`, `API Service`, `Open Platform Portal`, `SaaS`, `Sign In / Sign Up`, `File uploads`, `Search`, `Model`, `Vision Model`, `Thinking Model`, `Text Model`, `Research Model`, `K2 Model`, `Agentic Model` |
 | Minimax (`statuspage`) | `Large Language Models (LLM)`, `Text-to-Speech`, `Video Generation`, `Music Generation` |
 
-OpenAI component names were verified on 2026-07-10 against the [official OpenAI status proxy JSON](https://status.openai.com/proxy/status.openai.com). Configuration matches by name rather than ID; the remote list may continue to change.
+#### OpenAI Components
+
+OpenAI accepts qualified `Group/Component` names, while unique components are best configured by component name alone. The two `Login` components are best written as `APIs/Login` or `ChatGPT/Login`; unqualified `Login` aggregates their worst status. For example, `Codex/Codex API` is supported, but `Codex API` is the recommended shorthand.
+
+| Official group | Recommended `components` values |
+| --- | --- |
+| APIs | `Chat Completions`, `Responses`, `Fine-tuning`, `Embeddings`, `Images`, `Batch`, `Audio`, `Moderations`, `Realtime`, `Files`, `APIs/Login`, `Sora` |
+| ChatGPT | `Conversations`, `ChatGPT/Login`, `ChatGPT Work`, `Codex in ChatGPT Desktop`, `Compliance API`, `Search`, `File uploads`, `Voice mode`, `GPTs`, `Image Generation`, `Deep Research`, `Agent`, `ChatGPT Atlas`, `Sites`, `Connectors/Apps` |
+| Codex | `Codex Web`, `Codex API`, `CLI`, `VS Code extension` |
+| FedRAMP | `FedRAMP` |
+| Ads Platform | `Ads Manager`, `Ads API` |
+
+OpenAI groups and component names were verified on 2026-07-10 against `summary.structure` in the [official OpenAI status proxy JSON](https://status.openai.com/proxy/status.openai.com). Configuration matches by name rather than ID; the remote list may continue to change.
 
 ### DeepSeek Notes
 
