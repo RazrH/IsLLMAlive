@@ -2,24 +2,62 @@ package providers
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"isllmalive/internal/config"
 	"isllmalive/internal/status"
 )
 
+// ComponentStatus is the normalized status of one configured component.
+type ComponentStatus struct {
+	Name    string
+	Status  status.Status
+	Message string
+}
+
 // MonitorResult is the model passed between app, tray, and notify.
 type MonitorResult struct {
-	Key        string
-	Name       string
-	Type       string
-	Endpoint   string
-	Component  string
-	Status     status.Status
-	Message    string
-	CheckedAt  time.Time
-	Err        error
-	StatusPage string
+	Key               string
+	Name              string
+	Type              string
+	Endpoint          string
+	Component         string
+	Components        []string
+	ComponentStatuses []ComponentStatus
+	Status            status.Status
+	Message           string
+	CheckedAt         time.Time
+	Err               error
+	StatusPage        string
+}
+
+func aggregateComponentStatuses(result MonitorResult, components []ComponentStatus) MonitorResult {
+	result.ComponentStatuses = components
+	result.Status = status.Unknown
+	var abnormal []string
+	for _, component := range components {
+		if component.Status > result.Status {
+			result.Status = component.Status
+		}
+		if component.Status != status.Normal {
+			detail := component.Message
+			if detail == "" {
+				detail = component.Status.String()
+			}
+			abnormal = append(abnormal, fmt.Sprintf("%s: %s", component.Name, detail))
+		}
+	}
+
+	if len(components) == 1 {
+		result.Message = components[0].Message
+	} else if len(abnormal) == 0 {
+		result.Message = "operational"
+	} else {
+		result.Message = strings.Join(abnormal, "; ")
+	}
+	return result
 }
 
 // Provider represents an interface for fetching the status of a specific monitor type.

@@ -178,17 +178,31 @@ func (p *GoogleProvider) parseData(rawData []interface{}, monitor config.Monitor
 		return failSafe(result, "Incidents array missing")
 	}
 
-	targetCompID := float64(-1)
-	if monitor.Component != "" && !strings.EqualFold(monitor.Component, "none") {
-		targetCompID = mapGoogleComponent(monitor.Component)
-		if targetCompID == -1 {
-			result.Status = status.Unknown
-			result.Message = "Unsupported component"
-			result.Err = fmt.Errorf("unsupported google component: %s", monitor.Component)
-			return result
+	if componentNames := monitor.ComponentNames(); len(componentNames) > 0 {
+		componentStatuses := make([]ComponentStatus, 0, len(componentNames))
+		var unsupported []string
+		for _, name := range componentNames {
+			componentID := mapGoogleComponent(name)
+			if componentID == -1 {
+				componentStatuses = append(componentStatuses, ComponentStatus{Name: name, Status: status.Unknown, Message: "Unsupported component"})
+				unsupported = append(unsupported, name)
+				continue
+			}
+			componentStatus, message := evaluateGoogleIncidents(incidents, componentID)
+			componentStatuses = append(componentStatuses, ComponentStatus{Name: name, Status: componentStatus, Message: message})
 		}
+		result = aggregateComponentStatuses(result, componentStatuses)
+		if len(unsupported) > 0 {
+			result.Err = fmt.Errorf("unsupported google components: %s", strings.Join(unsupported, ", "))
+		}
+		return result
 	}
 
+	result.Status, result.Message = evaluateGoogleIncidents(incidents, -1)
+	return result
+}
+
+func evaluateGoogleIncidents(incidents []interface{}, targetCompID float64) (status.Status, string) {
 	var activeIncidents []string
 	maxSev := status.Normal
 
@@ -264,14 +278,10 @@ func (p *GoogleProvider) parseData(rawData []interface{}, monitor config.Monitor
 		activeIncidents = append(activeIncidents, title)
 	}
 
-	result.Status = maxSev
 	if maxSev == status.Normal {
-		result.Message = "operational"
-	} else {
-		result.Message = strings.Join(activeIncidents, ", ")
+		return maxSev, "operational"
 	}
-
-	return result
+	return maxSev, strings.Join(activeIncidents, ", ")
 }
 
 func failSafe(result MonitorResult, reason string) MonitorResult {

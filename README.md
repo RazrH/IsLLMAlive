@@ -98,6 +98,13 @@ go build -o isllmalive.exe ./cmd/isllmalive
 | `endpoint` | String | 按 provider 而定 | 状态获取端点。`statuspage` 使用状态页根地址；`deepseek` 使用 RSS feed；`apiget` 使用 API 探测端点或 API host。 |
 | `status_page` | String | 否 | 从托盘菜单打开的人类可读状态页。 |
 | `component` | String | 否 | 要监控的组件名。省略或使用 `"none"` 表示 page 级状态。 |
+| `components` | String 数组 | 否 | 同一 monitor 要聚合的多个组件。非空时优先于 `component`，状态取其中最差值。 |
+
+```json
+"components": ["API Service", "Web Chat Service"]
+```
+
+右键悬浮 monitor 菜单项时，只展开所选组件中状态为 `Degraded`、`Outage` 或 `Unknown` 的组件及其详情。旧的单组件配置继续兼容。
 
 默认 monitor 包括 OpenAI、Claude、Google AI、DeepSeek 和 Z.ai。
 
@@ -220,6 +227,13 @@ Each monitor supports these fields:
 | `endpoint` | String | Provider-specific | Fetch endpoint. For `statuspage`, use the status page root; for `deepseek`, use the RSS feed; for `apiget`, use the API probe endpoint or base API host. |
 | `status_page` | String | No | Human-readable status page opened from the tray menu. |
 | `component` | String | No | Component name to monitor. Omit it or use `"none"` for page-level status. |
+| `components` | String array | No | Multiple components aggregated by one monitor. A non-empty value takes precedence over `component`, and the worst status is used. |
+
+```json
+"components": ["API Service", "Web Chat Service"]
+```
+
+Hovering the monitor's right-click menu item expands only selected components whose status is `Degraded`, `Outage`, or `Unknown`, including their details. Existing single-component configurations remain compatible.
 
 Default monitors include OpenAI, Claude, Google AI, DeepSeek, and Z.ai.
 

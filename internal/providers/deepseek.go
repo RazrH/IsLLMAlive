@@ -197,24 +197,42 @@ type deepSeekProbeResult struct {
 }
 
 func fallbackDeepSeekDirectProbe(ctx context.Context, monitor config.MonitorConfig, result MonitorResult, rssMessage string, rssErr error) MonitorResult {
-	targetComponent := normalizeDeepSeekComponent(monitor.Component)
-	if monitor.Component != "" && !strings.EqualFold(monitor.Component, "none") && targetComponent == "" {
-		result.Message = "Unsupported component"
-		result.Err = fmt.Errorf("unsupported deepseek component: %s; rss_error: %w", monitor.Component, rssErr)
+	client := &http.Client{Timeout: 3 * time.Second}
+	if componentNames := monitor.ComponentNames(); len(componentNames) > 0 {
+		componentStatuses := make([]ComponentStatus, 0, len(componentNames))
+		probes := make(map[string]deepSeekProbeResult)
+		var unsupported []string
+		for _, name := range componentNames {
+			target := normalizeDeepSeekComponent(name)
+			if target == "" {
+				componentStatuses = append(componentStatuses, ComponentStatus{Name: name, Status: status.Unknown, Message: "Unsupported component"})
+				unsupported = append(unsupported, name)
+				continue
+			}
+			probe, ok := probes[target]
+			if !ok {
+				if target == "api" {
+					probe = probeDeepSeekService(ctx, client, "api", deepSeekAPIProbeURL)
+				} else {
+					probe = probeDeepSeekService(ctx, client, "web", deepSeekWebProbeURL)
+				}
+				probes[target] = probe
+			}
+			componentStatuses = append(componentStatuses, ComponentStatus{Name: name, Status: probe.Status, Message: probe.Message})
+		}
+		result = aggregateComponentStatuses(result, componentStatuses)
+		result.Message = fmt.Sprintf("RSS unavailable; direct probe fallback used; %s; rss_message=%s", result.Message, rssMessage)
+		if len(unsupported) > 0 {
+			result.Err = fmt.Errorf("unsupported deepseek components: %s; rss_error: %v", strings.Join(unsupported, ", "), rssErr)
+		} else if rssErr != nil {
+			result.Err = fmt.Errorf("rss fetch failed before direct probe fallback: %w", rssErr)
+		}
 		return result
 	}
 
-	client := &http.Client{Timeout: 3 * time.Second}
 	var probes []deepSeekProbeResult
-	switch targetComponent {
-	case "api":
-		probes = append(probes, probeDeepSeekService(ctx, client, "api", deepSeekAPIProbeURL))
-	case "web_chat":
-		probes = append(probes, probeDeepSeekService(ctx, client, "web", deepSeekWebProbeURL))
-	default:
-		probes = append(probes, probeDeepSeekService(ctx, client, "api", deepSeekAPIProbeURL))
-		probes = append(probes, probeDeepSeekService(ctx, client, "web", deepSeekWebProbeURL))
-	}
+	probes = append(probes, probeDeepSeekService(ctx, client, "api", deepSeekAPIProbeURL))
+	probes = append(probes, probeDeepSeekService(ctx, client, "web", deepSeekWebProbeURL))
 
 	worstStatus := status.Normal
 	allUnknown := true
@@ -294,13 +312,6 @@ func parseDeepSeekRSS(data []byte, monitor config.MonitorConfig, result MonitorR
 		return result
 	}
 
-	targetComponent := normalizeDeepSeekComponent(monitor.Component)
-	if monitor.Component != "" && !strings.EqualFold(monitor.Component, "none") && targetComponent == "" {
-		result.Message = "Unsupported component"
-		result.Err = fmt.Errorf("unsupported deepseek component: %s", monitor.Component)
-		return result
-	}
-
 	latestByIncident := make(map[string]deepSeekIncident)
 	parsedItems := 0
 	var latestPublished time.Time
@@ -337,6 +348,48 @@ func parseDeepSeekRSS(data []byte, monitor config.MonitorConfig, result MonitorR
 		return result
 	}
 
+	if componentNames := monitor.ComponentNames(); len(componentNames) > 0 {
+		componentStatuses := make([]ComponentStatus, 0, len(componentNames))
+		activeCounts := make([]int, 0, len(componentNames))
+		var unsupported []string
+		for _, name := range componentNames {
+			target := normalizeDeepSeekComponent(name)
+			if target == "" {
+				componentStatuses = append(componentStatuses, ComponentStatus{Name: name, Status: status.Unknown, Message: "Unsupported component"})
+				activeCounts = append(activeCounts, 0)
+				unsupported = append(unsupported, name)
+				continue
+			}
+			componentStatus, message, activeCount := evaluateDeepSeekIncidents(latestByIncident, target)
+			componentStatuses = append(componentStatuses, ComponentStatus{Name: name, Status: componentStatus, Message: message})
+			activeCounts = append(activeCounts, activeCount)
+		}
+		result = aggregateComponentStatuses(result, componentStatuses)
+		if len(componentStatuses) == 1 && len(unsupported) == 0 {
+			result.Message = deepSeekRSSSummary(componentStatuses[0].Message, len(feed.Channel.Items), parsedItems, activeCounts[0], latestPublished)
+		}
+		if len(unsupported) > 0 {
+			result.Err = fmt.Errorf("unsupported deepseek components: %s", strings.Join(unsupported, ", "))
+		}
+		return result
+	}
+
+	result.Status, result.Message, _ = evaluateDeepSeekIncidents(latestByIncident, "")
+	if result.Status == status.Normal {
+		result.Message = deepSeekRSSSummary("operational", len(feed.Channel.Items), parsedItems, 0, latestPublished)
+	} else {
+		activeCount := 0
+		for _, incident := range latestByIncident {
+			if !strings.EqualFold(strings.TrimSpace(incident.StatusText), "resolved") {
+				activeCount++
+			}
+		}
+		result.Message = deepSeekRSSSummary(result.Message, len(feed.Channel.Items), parsedItems, activeCount, latestPublished)
+	}
+	return result
+}
+
+func evaluateDeepSeekIncidents(latestByIncident map[string]deepSeekIncident, targetComponent string) (status.Status, string, int) {
 	worstStatus := status.Normal
 	var activeTitles []string
 	for _, incident := range latestByIncident {
@@ -353,13 +406,10 @@ func parseDeepSeekRSS(data []byte, monitor config.MonitorConfig, result MonitorR
 		activeTitles = append(activeTitles, incident.Title)
 	}
 
-	result.Status = worstStatus
 	if len(activeTitles) == 0 {
-		result.Message = deepSeekRSSSummary("operational", len(feed.Channel.Items), parsedItems, 0, latestPublished)
-	} else {
-		result.Message = deepSeekRSSSummary(strings.Join(activeTitles, ", "), len(feed.Channel.Items), parsedItems, len(activeTitles), latestPublished)
+		return worstStatus, "operational", 0
 	}
-	return result
+	return worstStatus, strings.Join(activeTitles, ", "), len(activeTitles)
 }
 
 func deepSeekRSSSummary(prefix string, feedItems, parsedItems, activeItems int, latestPublished time.Time) string {

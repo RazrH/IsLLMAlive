@@ -261,8 +261,27 @@ func monitorTooltip(res providers.MonitorResult, lang string) string {
 	if res.Endpoint != "" {
 		lines = append(lines, "Endpoint: "+res.Endpoint)
 	}
-	if res.Component != "" {
-		lines = append(lines, "Component: "+res.Component)
+	if len(res.Components) > 0 {
+		lines = append(lines, "Components: "+strings.Join(res.Components, ", "))
+	}
+	var componentLines []string
+	for _, component := range res.ComponentStatuses {
+		if component.Status == status.Normal {
+			continue
+		}
+		line := fmt.Sprintf("- %s: %s", component.Name, translateStatus(component.Status, lang))
+		if component.Message != "" {
+			line += " — " + component.Message
+		}
+		componentLines = append(componentLines, line)
+	}
+	if len(componentLines) > 0 {
+		heading := "Components needing attention:"
+		if strings.ToLower(lang) == "zh-cn" {
+			heading = "需关注的组件："
+		}
+		lines = append(lines, heading)
+		lines = append(lines, componentLines...)
 	}
 	if detail := monitorDetail(res, lang); detail != "" {
 		lines = append(lines, "Detail: "+detail)

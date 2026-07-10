@@ -5,17 +5,37 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // MonitorConfig represents a single monitor's configuration.
 type MonitorConfig struct {
-	Type       string `json:"type"`
-	Name       string `json:"name"`
-	Enabled    bool   `json:"enabled"`
-	Endpoint   string `json:"endpoint,omitempty"`
-	Component  string `json:"component,omitempty"`
-	StatusPage string `json:"status_page,omitempty"`
-	NotifyOn   bool   `json:"notify_on"`
+	Type       string   `json:"type"`
+	Name       string   `json:"name"`
+	Enabled    bool     `json:"enabled"`
+	Endpoint   string   `json:"endpoint,omitempty"`
+	Component  string   `json:"component,omitempty"`
+	Components []string `json:"components,omitempty"`
+	StatusPage string   `json:"status_page,omitempty"`
+	NotifyOn   bool     `json:"notify_on"`
+}
+
+// ComponentNames returns the configured component filters. The plural field
+// takes precedence while the singular field remains backward compatible.
+func (m MonitorConfig) ComponentNames() []string {
+	components := m.Components
+	if len(components) == 0 {
+		components = []string{m.Component}
+	}
+
+	result := make([]string, 0, len(components))
+	for _, component := range components {
+		component = strings.TrimSpace(component)
+		if component != "" && !strings.EqualFold(component, "none") {
+			result = append(result, component)
+		}
+	}
+	return result
 }
 
 type Config struct {

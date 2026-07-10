@@ -150,6 +150,7 @@ func (a *App) pollAllLocked() {
 			res.Type = monitor.Type
 			res.Endpoint = monitor.Endpoint
 			res.Component = monitor.Component
+			res.Components = monitor.ComponentNames()
 			res.StatusPage = resolveStatusPage(monitor, res.StatusPage)
 
 			results[idx] = res
@@ -262,6 +263,7 @@ func (a *App) Diagnostics() string {
 		fmt.Fprintf(&b, "  config.enabled: %t\n", monitor.Enabled)
 		fmt.Fprintf(&b, "  config.endpoint: %s\n", monitor.Endpoint)
 		fmt.Fprintf(&b, "  config.component: %s\n", monitor.Component)
+		fmt.Fprintf(&b, "  config.components: %s\n", strings.Join(monitor.Components, ", "))
 		fmt.Fprintf(&b, "  config.status_page: %s\n", monitor.StatusPage)
 		fmt.Fprintf(&b, "  config.notify_on: %t\n", monitor.NotifyOn)
 
@@ -275,6 +277,10 @@ func (a *App) Diagnostics() string {
 		fmt.Fprintf(&b, "  result.type: %s\n", res.Type)
 		fmt.Fprintf(&b, "  result.endpoint: %s\n", res.Endpoint)
 		fmt.Fprintf(&b, "  result.component: %s\n", res.Component)
+		fmt.Fprintf(&b, "  result.components: %s\n", strings.Join(res.Components, ", "))
+		for _, component := range res.ComponentStatuses {
+			fmt.Fprintf(&b, "  result.component_status: %s | %s | %s\n", component.Name, component.Status, component.Message)
+		}
 		fmt.Fprintf(&b, "  result.status: %s\n", res.Status)
 		fmt.Fprintf(&b, "  result.message: %s\n", res.Message)
 		fmt.Fprintf(&b, "  result.checked_at: %s\n", res.CheckedAt.Format(time.RFC3339))

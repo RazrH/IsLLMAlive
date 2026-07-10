@@ -71,16 +71,27 @@ func (p *StatuspageProvider) Fetch(ctx context.Context, monitor config.MonitorCo
 
 				if err == nil {
 					// Component level
-					if monitor.Component != "" && !strings.EqualFold(monitor.Component, "none") {
-						for _, comp := range summary.Components {
-							if strings.EqualFold(comp.Name, monitor.Component) {
-								result.Status = mapComponentStatus(comp.Status)
-								result.Message = comp.Status
-								return result
+					if componentNames := monitor.ComponentNames(); len(componentNames) > 0 {
+						componentStatuses := make([]ComponentStatus, 0, len(componentNames))
+						var missing []string
+						for _, name := range componentNames {
+							found := false
+							for _, comp := range summary.Components {
+								if strings.EqualFold(comp.Name, name) {
+									componentStatuses = append(componentStatuses, ComponentStatus{Name: name, Status: mapComponentStatus(comp.Status), Message: comp.Status})
+									found = true
+									break
+								}
+							}
+							if !found {
+								componentStatuses = append(componentStatuses, ComponentStatus{Name: name, Status: status.Unknown, Message: "Component not found"})
+								missing = append(missing, name)
 							}
 						}
-						result.Message = "Component not found"
-						result.Err = fmt.Errorf("component '%s' not found", monitor.Component)
+						result = aggregateComponentStatuses(result, componentStatuses)
+						if len(missing) > 0 {
+							result.Err = fmt.Errorf("components not found: %s", strings.Join(missing, ", "))
+						}
 						return result
 					}
 

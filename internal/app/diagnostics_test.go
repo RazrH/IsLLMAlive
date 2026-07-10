@@ -23,6 +23,7 @@ func TestDiagnosticsIncludesProviderFailureDetails(t *testing.T) {
 				Enabled:    true,
 				Endpoint:   "https://status.deepseek.com/feed.rss",
 				Component:  "API Service",
+				Components: []string{"API Service", "Web Chat Service"},
 				StatusPage: "https://status.deepseek.com",
 				NotifyOn:   true,
 			},
@@ -34,6 +35,10 @@ func TestDiagnosticsIncludesProviderFailureDetails(t *testing.T) {
 			Type:       "deepseek",
 			Endpoint:   "https://status.deepseek.com/feed.rss",
 			Component:  "API Service",
+			Components: []string{"API Service", "Web Chat Service"},
+			ComponentStatuses: []providers.ComponentStatus{
+				{Name: "API Service", Status: status.Unknown, Message: "network error"},
+			},
 			Status:     status.Unknown,
 			Message:    "Network error fetching https://status.deepseek.com/feed.rss",
 			CheckedAt:  time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC),
@@ -47,6 +52,8 @@ func TestDiagnosticsIncludesProviderFailureDetails(t *testing.T) {
 	for _, want := range []string{
 		"config.type: deepseek",
 		"config.endpoint: https://status.deepseek.com/feed.rss",
+		"config.components: API Service, Web Chat Service",
+		"result.component_status: API Service | Unknown | network error",
 		"result.status: Unknown",
 		"result.message: Network error fetching https://status.deepseek.com/feed.rss",
 		"result.error: tls handshake timeout",

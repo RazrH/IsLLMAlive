@@ -15,6 +15,8 @@ import (
 // OpenAIProvider implements the Provider interface for OpenAI's proxy API (Incident.io).
 type OpenAIProvider struct{}
 
+var openAIEndpoint = "https://status.openai.com/proxy/status.openai.com"
+
 type oaiProxyResponse struct {
 	Summary struct {
 		Components []struct {
@@ -40,7 +42,7 @@ func (p *OpenAIProvider) Fetch(ctx context.Context, monitor config.MonitorConfig
 		StatusPage: "https://status.openai.com",
 	}
 
-	endpoint := "https://status.openai.com/proxy/status.openai.com"
+	endpoint := openAIEndpoint
 	client := &http.Client{Timeout: 3 * time.Second}
 	var lastErr error
 	var lastMessage string
@@ -71,21 +73,33 @@ func (p *OpenAIProvider) Fetch(ctx context.Context, monitor config.MonitorConfig
 					}
 
 					// Component level
-					if monitor.Component != "" && !strings.EqualFold(monitor.Component, "none") {
-						for _, comp := range proxyResp.Summary.Components {
-							if strings.EqualFold(comp.Name, monitor.Component) {
-								if compStatus, isAffected := affectedMap[comp.ID]; isAffected {
-									result.Status = mapOAIStatus(compStatus)
-									result.Message = compStatus
-								} else {
-									result.Status = status.Normal
-									result.Message = "operational"
+					if componentNames := monitor.ComponentNames(); len(componentNames) > 0 {
+						componentStatuses := make([]ComponentStatus, 0, len(componentNames))
+						var missing []string
+						for _, name := range componentNames {
+							found := false
+							for _, comp := range proxyResp.Summary.Components {
+								if !strings.EqualFold(comp.Name, name) {
+									continue
 								}
-								return result
+								componentStatus := ComponentStatus{Name: name, Status: status.Normal, Message: "operational"}
+								if rawStatus, affected := affectedMap[comp.ID]; affected {
+									componentStatus.Status = mapOAIStatus(rawStatus)
+									componentStatus.Message = rawStatus
+								}
+								componentStatuses = append(componentStatuses, componentStatus)
+								found = true
+								break
+							}
+							if !found {
+								componentStatuses = append(componentStatuses, ComponentStatus{Name: name, Status: status.Unknown, Message: "Component not found"})
+								missing = append(missing, name)
 							}
 						}
-						result.Message = "Component not found"
-						result.Err = fmt.Errorf("component '%s' not found", monitor.Component)
+						result = aggregateComponentStatuses(result, componentStatuses)
+						if len(missing) > 0 {
+							result.Err = fmt.Errorf("components not found: %s", strings.Join(missing, ", "))
+						}
 						return result
 					}
 

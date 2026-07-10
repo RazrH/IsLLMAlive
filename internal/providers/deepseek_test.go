@@ -58,6 +58,22 @@ func TestParseDeepSeekRSSActiveOutageForWebComponent(t *testing.T) {
 	}
 }
 
+func TestParseDeepSeekRSSMultipleComponentsUseWorstStatus(t *testing.T) {
+	rss := `<rss version="1.0"><channel>
+<item><title>API 性能下降</title><link>api</link><description>&lt;strong&gt;Status:&lt;/strong&gt; investigating&lt;strong&gt;Affected components:&lt;/strong&gt; API Service</description><pubDate>Thu, 28 May 2026 19:24:51 +0800</pubDate></item>
+<item><title>Web unavailable</title><link>web</link><description>&lt;strong&gt;Status:&lt;/strong&gt; investigating&lt;strong&gt;Affected components:&lt;/strong&gt; Web Chat Service</description><pubDate>Thu, 28 May 2026 19:24:51 +0800</pubDate></item>
+</channel></rss>`
+
+	got := parseDeepSeekRSS([]byte(rss), config.MonitorConfig{Name: "DeepSeek", Components: []string{"API Service", "Web Chat Service"}}, deepSeekTestResult(), deepSeekTestNow())
+
+	if got.Status != status.Outage {
+		t.Fatalf("Status = %s, want Outage", got.Status)
+	}
+	if len(got.ComponentStatuses) != 2 || got.ComponentStatuses[0].Status != status.Degraded {
+		t.Fatalf("ComponentStatuses = %#v", got.ComponentStatuses)
+	}
+}
+
 func TestParseDeepSeekRSSComponentFilterIgnoresUnaffectedIncident(t *testing.T) {
 	rss := `<rss version="2.0"><channel><item>
 <title>API 性能下降（API Degraded Performance）</title>
@@ -191,6 +207,22 @@ func TestFallbackDeepSeekDirectProbePageLevelTakesWorstStatus(t *testing.T) {
 	}
 	if !strings.Contains(got.Message, "api=Normal(HTTP 401)") || !strings.Contains(got.Message, "web=Outage(HTTP 502)") {
 		t.Fatalf("Message = %q, want API and web fallback details", got.Message)
+	}
+}
+
+func TestFallbackDeepSeekDirectProbeMultipleComponents(t *testing.T) {
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusUnauthorized) }))
+	defer apiServer.Close()
+	webServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusBadGateway) }))
+	defer webServer.Close()
+	withDeepSeekProbeURLs(t, apiServer.URL, webServer.URL)
+
+	got := fallbackDeepSeekDirectProbe(context.Background(), config.MonitorConfig{
+		Name: "DeepSeek", Components: []string{"API Service", "Web Chat Service"},
+	}, deepSeekTestResult(), "rss failed", context.DeadlineExceeded)
+
+	if got.Status != status.Outage || len(got.ComponentStatuses) != 2 {
+		t.Fatalf("got status=%s components=%#v, want Outage with two components", got.Status, got.ComponentStatuses)
 	}
 }
 
