@@ -97,8 +97,8 @@ go build -o isllmalive.exe ./cmd/isllmalive
 | `notify_on` | Bool | 是 | 单个 monitor 的通知开关。 |
 | `endpoint` | String | 按 provider 而定 | 状态获取端点。`statuspage` 使用状态页根地址；`deepseek` 使用 RSS feed；`apiget` 使用 API 探测端点或 API host。 |
 | `status_page` | String | 否 | 从托盘菜单打开的人类可读状态页。 |
-| `component` | String | 否 | 要监控的组件名。省略或使用 `"none"` 表示 page 级状态。 |
-| `components` | String 数组 | 否 | 同一 monitor 要聚合的多个组件。非空时优先于 `component`，状态取其中最差值。 |
+| `components` | String 数组 | 否 | 要监控的组件名数组，状态取其中最差值。省略或使用 `["none"]` 表示 page 级状态。 |
+| `component` | String | 否 | 旧版单组件兼容字段。仅在 `components` 为空时使用。 |
 
 ```json
 "components": ["API Service", "Web Chat Service"]
@@ -114,12 +114,14 @@ go build -o isllmalive.exe ./cmd/isllmalive
 
 | Provider | 组件 |
 | --- | --- |
-| OpenAI (`openai`) | `Responses`, `Fine-tuning`, `Images`, `Batch`, `Moderations`, `Embeddings`, `Files`, `Login`, `File uploads`, `CLI`, `FedRAMP`, `Compliance API`, `ChatGPT Atlas`, `Realtime`, `Sora`, `Conversations`, `Agent`, `Connectors/Apps`, `Codex API`, `Deep Research`, `Search`, `GPTs`, `Image Generation`, `Audio`, `VS Code extension`, `Voice mode`, `Codex Web`, `App`, `Chat Completions` |
+| OpenAI (`openai`) | `Batch`, `Audio`, `Login`, `Compliance API`, `Embeddings`, `Moderations`, `Files`, `Conversations`, `ChatGPT Work`, `Codex in ChatGPT Desktop`, `Agent`, `Sites`, `Codex API`, `VS Code extension`, `FedRAMP`, `Ads Manager`, `Search`, `GPTs`, `Image Generation`, `ChatGPT Atlas`, `Connectors/Apps`, `Ads API`, `Fine-tuning`, `Responses`, `Realtime`, `Sora`, `Voice mode`, `Deep Research`, `Images`, `Codex Web`, `File uploads`, `Chat Completions`, `CLI` |
 | Anthropic (`statuspage`) | `claude.ai`, `Claude Console (platform.claude.com)`, `Claude API (api.anthropic.com)`, `Claude Code`, `Claude Cowork`, `Claude for Government` |
 | Google (`google`) | `api`, `multimodal live api`, `google ai studio` |
 | DeepSeek (`deepseek`) | `API Service`, `Web Chat Service` |
 | Kimi (`statuspage`) | `Kimi`, `Website`, `Open API`, `API Service`, `Open Platform Portal`, `SaaS`, `Sign In / Sign Up`, `File uploads`, `Search`, `Model`, `Vision Model`, `Thinking Model`, `Text Model`, `Research Model`, `K2 Model`, `Agentic Model` |
 | Minimax (`statuspage`) | `Large Language Models (LLM)`, `Text-to-Speech`, `Video Generation`, `Music Generation` |
+
+OpenAI 组件名称于 2026-07-10 从 [OpenAI 官方状态代理 JSON](https://status.openai.com/proxy/status.openai.com) 核对；配置按名称而非 ID 匹配，远端列表后续可能继续变化。
 
 ### DeepSeek 说明
 
@@ -226,8 +228,8 @@ Each monitor supports these fields:
 | `notify_on` | Bool | Yes | Per-monitor notification switch. |
 | `endpoint` | String | Provider-specific | Fetch endpoint. For `statuspage`, use the status page root; for `deepseek`, use the RSS feed; for `apiget`, use the API probe endpoint or base API host. |
 | `status_page` | String | No | Human-readable status page opened from the tray menu. |
-| `component` | String | No | Component name to monitor. Omit it or use `"none"` for page-level status. |
-| `components` | String array | No | Multiple components aggregated by one monitor. A non-empty value takes precedence over `component`, and the worst status is used. |
+| `components` | String array | No | Component names aggregated by one monitor; the worst status is used. Omit it or use `["none"]` for page-level status. |
+| `component` | String | No | Legacy single-component compatibility field, used only when `components` is empty. |
 
 ```json
 "components": ["API Service", "Web Chat Service"]
@@ -243,12 +245,14 @@ Component filtering is not supported for `apiget` monitors.
 
 | Provider | Components |
 | --- | --- |
-| OpenAI (`openai`) | `Responses`, `Fine-tuning`, `Images`, `Batch`, `Moderations`, `Embeddings`, `Files`, `Login`, `File uploads`, `CLI`, `FedRAMP`, `Compliance API`, `ChatGPT Atlas`, `Realtime`, `Sora`, `Conversations`, `Agent`, `Connectors/Apps`, `Codex API`, `Deep Research`, `Search`, `GPTs`, `Image Generation`, `Audio`, `VS Code extension`, `Voice mode`, `Codex Web`, `App`, `Chat Completions` |
+| OpenAI (`openai`) | `Batch`, `Audio`, `Login`, `Compliance API`, `Embeddings`, `Moderations`, `Files`, `Conversations`, `ChatGPT Work`, `Codex in ChatGPT Desktop`, `Agent`, `Sites`, `Codex API`, `VS Code extension`, `FedRAMP`, `Ads Manager`, `Search`, `GPTs`, `Image Generation`, `ChatGPT Atlas`, `Connectors/Apps`, `Ads API`, `Fine-tuning`, `Responses`, `Realtime`, `Sora`, `Voice mode`, `Deep Research`, `Images`, `Codex Web`, `File uploads`, `Chat Completions`, `CLI` |
 | Anthropic (`statuspage`) | `claude.ai`, `Claude Console (platform.claude.com)`, `Claude API (api.anthropic.com)`, `Claude Code`, `Claude Cowork`, `Claude for Government` |
 | Google (`google`) | `api`, `multimodal live api`, `google ai studio` |
 | DeepSeek (`deepseek`) | `API Service`, `Web Chat Service` |
 | Kimi (`statuspage`) | `Kimi`, `Website`, `Open API`, `API Service`, `Open Platform Portal`, `SaaS`, `Sign In / Sign Up`, `File uploads`, `Search`, `Model`, `Vision Model`, `Thinking Model`, `Text Model`, `Research Model`, `K2 Model`, `Agentic Model` |
 | Minimax (`statuspage`) | `Large Language Models (LLM)`, `Text-to-Speech`, `Video Generation`, `Music Generation` |
+
+OpenAI component names were verified on 2026-07-10 against the [official OpenAI status proxy JSON](https://status.openai.com/proxy/status.openai.com). Configuration matches by name rather than ID; the remote list may continue to change.
 
 ### DeepSeek Notes
 
