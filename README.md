@@ -106,7 +106,7 @@ go build -o isllmalive.exe ./cmd/isllmalive
 
 右键悬浮 monitor 菜单项时，只展开所选组件中状态为 `Degraded`、`Outage` 或 `Unknown` 的组件及其详情。旧的单组件配置继续兼容。
 
-默认 monitor 包括 OpenAI、Claude、Google AI、DeepSeek 和 Z.ai。
+默认 monitor 包括 OpenAI、Claude、Google AI、DeepSeek 和 Z.ai。新生成的配置统一使用 `components`；DeepSeek 默认选择 `API Service` 和 `Web Chat Service`，其余支持组件的默认 monitor 使用 `["none"]` 保持 page 级状态。
 
 ### 支持的组件
 
@@ -235,7 +235,7 @@ Each monitor supports these fields:
 
 Hovering the monitor's right-click menu item expands only selected components whose status is `Degraded`, `Outage`, or `Unknown`, including their details. Existing single-component configurations remain compatible.
 
-Default monitors include OpenAI, Claude, Google AI, DeepSeek, and Z.ai.
+Default monitors include OpenAI, Claude, Google AI, DeepSeek, and Z.ai. Newly generated configurations consistently use `components`; DeepSeek selects `API Service` and `Web Chat Service` by default, while the other component-aware defaults use `["none"]` for page-level status.
 
 ### Supported Components
 

@@ -58,7 +58,7 @@ func DefaultConfig() *Config {
 				Enabled:    true,
 				NotifyOn:   true,
 				StatusPage: "https://status.openai.com",
-				Component:  "none",
+				Components: []string{"none"},
 			},
 			{
 				Type:       "statuspage",
@@ -67,7 +67,7 @@ func DefaultConfig() *Config {
 				NotifyOn:   true,
 				Endpoint:   "https://status.claude.com",
 				StatusPage: "https://status.claude.com",
-				Component:  "none",
+				Components: []string{"none"},
 			},
 			{
 				Type:       "google",
@@ -75,7 +75,7 @@ func DefaultConfig() *Config {
 				Enabled:    true,
 				NotifyOn:   true,
 				StatusPage: "https://aistudio.google.com/status",
-				Component:  "none",
+				Components: []string{"none"},
 			},
 			{
 				Type:       "deepseek",
@@ -84,7 +84,7 @@ func DefaultConfig() *Config {
 				NotifyOn:   true,
 				Endpoint:   "https://status.deepseek.com/feed.rss",
 				StatusPage: "https://status.deepseek.com",
-				Component:  "none",
+				Components: []string{"API Service", "Web Chat Service"},
 			},
 			{
 				Type:       "apiget",
