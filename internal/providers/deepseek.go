@@ -51,12 +51,14 @@ type deepSeekRSSItem struct {
 }
 
 type deepSeekIncident struct {
-	Title      string
-	Link       string
-	StatusText string
-	Components []string
-	Published  time.Time
-	Severity   status.Status
+	Title             string
+	Link              string
+	StatusText        string
+	Components        []string
+	UnknownComponents []string
+	ComponentLabels   string
+	Published         time.Time
+	Severity          status.Status
 }
 
 func (p *DeepSeekProvider) Fetch(ctx context.Context, monitor config.MonitorConfig) MonitorResult {
@@ -151,6 +153,10 @@ func fallbackDeepSeekDirectProbe(ctx context.Context, monitor config.MonitorConf
 			if target == "" {
 				componentStatuses = append(componentStatuses, ComponentStatus{Name: name, Status: status.Unknown, Message: "Unsupported component"})
 				unsupported = append(unsupported, name)
+				continue
+			}
+			if target != "api" && target != "web_chat" {
+				componentStatuses = append(componentStatuses, ComponentStatus{Name: name, Status: status.Unknown, Message: "RSS unavailable; no direct probe for this service or model family"})
 				continue
 			}
 			probe, ok := probes[target]
@@ -255,27 +261,34 @@ func parseDeepSeekRSS(data []byte, m config.MonitorConfig, b MonitorResult, now 
 	return s.evaluate(m, b)
 }
 
-func evaluateDeepSeekIncidents(latestByIncident map[string]deepSeekIncident, targetComponent string) (status.Status, string, int) {
+func evaluateDeepSeekIncidents(latestByIncident map[string]deepSeekIncident, targetComponent string) (status.Status, string, int, error) {
 	worstStatus := status.Normal
 	var activeTitles []string
+	var issues problems
 	for _, incident := range latestByIncident {
 		if strings.EqualFold(strings.TrimSpace(incident.StatusText), "resolved") {
 			continue
 		}
+		if len(incident.UnknownComponents) > 0 {
+			issues.add(fmt.Errorf("unrecognized RSS components: %s", strings.Join(incident.UnknownComponents, ", ")))
+		}
+		if (targetComponent == "api_pro" || targetComponent == "api_flash") && slices.Contains(incident.Components, "api") && !slices.Contains(incident.Components, targetComponent) {
+			issues.add(fmt.Errorf("RSS incident does not distinguish Pro/Flash: %s", incident.ComponentLabels))
+		}
 		if targetComponent != "" && !deepSeekIncidentAffectsComponent(incident, targetComponent) {
 			continue
 		}
-
 		if incident.Severity > worstStatus {
 			worstStatus = incident.Severity
 		}
 		activeTitles = append(activeTitles, incident.Title)
 	}
-
-	if len(activeTitles) == 0 {
-		return worstStatus, "operational", 0
+	message := "operational"
+	if len(activeTitles) > 0 {
+		message = strings.Join(activeTitles, ", ")
 	}
-	return worstStatus, strings.Join(activeTitles, ", "), len(activeTitles)
+	result := incomplete(MonitorResult{Status: worstStatus, Message: message}, issues.err())
+	return result.Status, result.Message, len(activeTitles), result.Err
 }
 
 func deepSeekRSSSummary(prefix string, feedItems, parsedItems, activeItems int, latestPublished time.Time) string {
@@ -294,7 +307,7 @@ func parseDeepSeekRSSItem(item deepSeekRSSItem) (deepSeekIncident, error) {
 	description := html.UnescapeString(item.Description)
 	statusText := extractDeepSeekDescriptionField(description, "Status")
 	componentsText := extractDeepSeekDescriptionField(description, "Affected components")
-	components := parseDeepSeekComponents(componentsText)
+	components, unknown := parseDeepSeekComponents(componentsText)
 	if strings.TrimSpace(item.Title) == "" {
 		return deepSeekIncident{}, fmt.Errorf("RSS item title missing")
 	}
@@ -304,16 +317,18 @@ func parseDeepSeekRSSItem(item deepSeekRSSItem) (deepSeekIncident, error) {
 		return deepSeekIncident{}, fmt.Errorf("unknown RSS incident status: %q", statusText)
 	}
 	if !strings.EqualFold(strings.TrimSpace(statusText), "resolved") && len(components) == 0 {
-		return deepSeekIncident{}, fmt.Errorf("active RSS incident has no interpretable components")
+		return deepSeekIncident{}, fmt.Errorf("active RSS incident has no interpretable components: %s", componentsText)
 	}
 
 	return deepSeekIncident{
-		Title:      strings.TrimSpace(item.Title),
-		Link:       strings.TrimSpace(item.Link),
-		StatusText: strings.TrimSpace(statusText),
-		Components: components,
-		Published:  published,
-		Severity:   classifyDeepSeekSeverity(item.Title),
+		Title:             strings.TrimSpace(item.Title),
+		Link:              strings.TrimSpace(item.Link),
+		StatusText:        strings.TrimSpace(statusText),
+		Components:        components,
+		UnknownComponents: unknown,
+		ComponentLabels:   strings.Clone(componentsText),
+		Published:         published,
+		Severity:          classifyDeepSeekSeverity(item.Title),
 	}, nil
 }
 
@@ -333,19 +348,26 @@ func extractDeepSeekDescriptionField(description, label string) string {
 	return strings.TrimSpace(matches[1])
 }
 
-func parseDeepSeekComponents(text string) []string {
-	parts := strings.Split(text, ",")
-	components := make([]string, 0, len(parts))
-	for _, part := range parts {
+func parseDeepSeekComponents(text string) (components, unknown []string) {
+	for part := range strings.SplitSeq(text, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
 		component := normalizeDeepSeekComponent(part)
-		if component != "" {
+		if component == "" {
+			unknown = append(unknown, strings.Clone(part))
+		} else if !slices.Contains(components, component) {
 			components = append(components, component)
 		}
 	}
-	return components
+	return components, unknown
 }
 
 func deepSeekIncidentAffectsComponent(incident deepSeekIncident, target string) bool {
+	if target == "api" {
+		return slices.Contains(incident.Components, "api") || slices.Contains(incident.Components, "api_pro") || slices.Contains(incident.Components, "api_flash")
+	}
 	return slices.Contains(incident.Components, target)
 }
 
@@ -355,10 +377,24 @@ func normalizeDeepSeekComponent(component string) string {
 		return ""
 	}
 	if strings.Contains(normalized, "api") || strings.Contains(normalized, "接口") {
+		words := strings.FieldsFunc(normalized, func(r rune) bool { return r < 'a' || r > 'z' })
+		pro, flash := slices.Contains(words, "pro"), slices.Contains(words, "flash")
+		if pro && !flash {
+			return "api_pro"
+		}
+		if flash && !pro {
+			return "api_flash"
+		}
 		return "api"
 	}
-	if strings.Contains(normalized, "web") || strings.Contains(normalized, "网页") || strings.Contains(normalized, "对话") {
+	if strings.Contains(normalized, "web") || strings.Contains(normalized, "网页") || strings.Contains(normalized, "对话") || strings.Contains(normalized, "chat service") || strings.Contains(normalized, "chatservice") {
 		return "web_chat"
+	}
+	if strings.Contains(normalized, "file upload") || strings.Contains(normalized, "上传文件") {
+		return "file_upload"
+	}
+	if strings.Contains(normalized, "search service") || strings.Contains(normalized, "搜索服务") {
+		return "search"
 	}
 	return ""
 }
@@ -366,6 +402,8 @@ func normalizeDeepSeekComponent(component string) string {
 func classifyDeepSeekSeverity(title string) status.Status {
 	normalized := strings.ToLower(title)
 	switch {
+	case strings.Contains(normalized, "partially unavailable"), strings.Contains(normalized, "partial outage"), strings.Contains(normalized, "部分中断"):
+		return status.Degraded
 	case strings.Contains(normalized, "unavailable"),
 		strings.Contains(normalized, "not available"),
 		strings.Contains(normalized, "不可用"),

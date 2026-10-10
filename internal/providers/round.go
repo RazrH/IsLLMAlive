@@ -55,7 +55,7 @@ func (e *Engine) NewRound(ctx context.Context, monitors []config.MonitorConfig) 
 		}
 		for _, name := range names {
 			target := normalizeDeepSeekComponent(name)
-			if target == "" {
+			if target != "api" && target != "web_chat" {
 				continue
 			}
 			found := slices.Contains(r.probes[source], target)

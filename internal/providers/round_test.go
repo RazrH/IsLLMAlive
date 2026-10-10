@@ -204,12 +204,23 @@ func TestDeepSeekFallbackUnionProbesEachTargetOnce(t *testing.T) {
 	a := config.MonitorConfig{Type: "deepseek", Enabled: true, Endpoint: server.URL + "/feed", Components: []string{"API Service"}}
 	b := a
 	b.Components = []string{"Web Chat Service"}
-	r := NewEngine().NewRound(t.Context(), []config.MonitorConfig{a, b})
+	pro, flash, chat := a, a, a
+	pro.Components, flash.Components, chat.Components = []string{"Pro API"}, []string{"Flash API"}, []string{"Chat Service"}
+	r := NewEngine().NewRound(t.Context(), []config.MonitorConfig{a, b, pro, flash, chat})
 	var one, two MonitorResult
 	var wg sync.WaitGroup
 	wg.Go(func() { one = r.Fetch(t.Context(), a) })
 	wg.Go(func() { two = r.Fetch(t.Context(), b) })
 	wg.Wait()
+	for _, model := range []config.MonitorConfig{pro, flash} {
+		got := r.Fetch(t.Context(), model)
+		if got.Status != status.Unknown || got.Err == nil {
+			t.Fatalf("gateway probe promoted to model health: %#v", got)
+		}
+	}
+	if got := r.Fetch(t.Context(), chat); got.Status != status.Outage {
+		t.Fatalf("Chat Service fallback = %s", got.Status)
+	}
 	if apis.Load() != 1 || webs.Load() != 1 || feeds.Load() != 6 {
 		t.Fatalf("feed=%d api=%d web=%d", feeds.Load(), apis.Load(), webs.Load())
 	}

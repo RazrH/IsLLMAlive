@@ -91,7 +91,8 @@ func (s deepSeekSnapshot) evaluate(monitor config.MonitorConfig, result MonitorR
 				unsupported = append(unsupported, name)
 				continue
 			}
-			componentStatus, message, activeCount := evaluateDeepSeekIncidents(s.incidents, target)
+			componentStatus, message, activeCount, componentErr := evaluateDeepSeekIncidents(s.incidents, target)
+			result.Err = errors.Join(result.Err, componentErr)
 			componentStatuses = append(componentStatuses, ComponentStatus{Name: name, Status: componentStatus, Message: message})
 			activeCounts = append(activeCounts, activeCount)
 		}
@@ -105,7 +106,7 @@ func (s deepSeekSnapshot) evaluate(monitor config.MonitorConfig, result MonitorR
 		return result
 	}
 
-	result.Status, result.Message, _ = evaluateDeepSeekIncidents(s.incidents, "")
+	result.Status, result.Message, _, result.Err = evaluateDeepSeekIncidents(s.incidents, "")
 	if result.Status == status.Normal {
 		result.Message = deepSeekRSSSummary("operational", s.feedItems, s.parsedItems, 0, s.latestPublished)
 	} else {
@@ -170,6 +171,10 @@ func (s deepSeekProbeSnapshot) evaluate(m config.MonitorConfig, b MonitorResult)
 	components := make([]ComponentStatus, 0, len(names))
 	for _, name := range names {
 		target := normalizeDeepSeekComponent(name)
+		if target == "api_pro" || target == "api_flash" {
+			components = append(components, ComponentStatus{Name: name, Status: status.Unknown, Message: "RSS unavailable; gateway probe cannot verify this model family"})
+			continue
+		}
 		probe, ok := s.probes[target]
 		if !ok {
 			components = append(components, ComponentStatus{Name: name, Status: status.Unknown, Message: "Unsupported or unavailable probe"})

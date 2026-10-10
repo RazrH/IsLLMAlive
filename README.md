@@ -117,7 +117,7 @@ go build -o isllmalive.exe ./cmd/isllmalive
 | OpenAI (`openai`) | 见下方按官方状态页分组的推荐配置值。 |
 | Anthropic (`statuspage`) | `claude.ai`, `Claude Console (platform.claude.com)`, `Claude API (api.anthropic.com)`, `Claude Code`, `Claude Cowork`, `Claude for Government` |
 | Google (`google`) | `api`, `multimodal live api`, `google ai studio` |
-| DeepSeek (`deepseek`) | `API Service`, `Web Chat Service` |
+| DeepSeek (`deepseek`) | `Pro API`, `Flash API`, `Web Chat Service`；`API Service` 兼容聚合全部 API。 |
 | Kimi (`statuspage`) | `Kimi`, `Website`, `Open API`, `API Service`, `Open Platform Portal`, `SaaS`, `Sign In / Sign Up`, `File uploads`, `Search`, `Model`, `Vision Model`, `Thinking Model`, `Text Model`, `Research Model`, `K2 Model`, `Agentic Model` |
 | Minimax (`statuspage`) | `Large Language Models (LLM)`, `Text-to-Speech`, `Video Generation`, `Music Generation` |
 
@@ -127,24 +127,51 @@ OpenAI 支持 `分组/组件` 限定名，但唯一组件推荐直接写组件�
 
 | 官方分组 | `components` 推荐配置值 |
 | --- | --- |
-| APIs | `Chat Completions`, `Responses`, `Fine-tuning`, `Embeddings`, `Images`, `Batch`, `Audio`, `Moderations`, `Realtime`, `Files`, `APIs/Login`, `Sora` |
-| ChatGPT | `Conversations`, `ChatGPT/Login`, `ChatGPT Work`, `Codex in ChatGPT Desktop`, `Compliance API`, `Search`, `File uploads`, `Voice mode`, `GPTs`, `Image Generation`, `Deep Research`, `Agent`, `ChatGPT Atlas`, `Sites`, `Connectors/Apps` |
+| APIs | `Chat Completions`, `Responses`, `Agents`, `Decisions`, `Fine-tuning`, `Embeddings`, `Images`, `Batch`, `Audio`, `Moderations`, `Realtime`, `Files`, `APIs/Login` |
+| ChatGPT | `Conversations`, `ChatGPT/Login`, `ChatGPT Work`, `Codex in ChatGPT Desktop`, `Compliance API`, `Search`, `File uploads`, `Voice mode`, `GPTs`, `Image Generation`, `Deep Research`, `Agent`, `dots`, `Space`, `Sites`, `Connectors/Apps` |
 | Codex | `Codex Web`, `Codex API`, `CLI`, `VS Code extension` |
 | FedRAMP | `FedRAMP` |
 | Ads Platform | `Ads Manager`, `Ads API` |
+| 未列入当前分组 | `ChatGPT Atlas`（使用未限定名） |
 
-OpenAI 分组和组件名称于 2026-07-10 从 [OpenAI 官方状态代理 JSON](https://status.openai.com/proxy/status.openai.com) 的 `summary.structure` 核对；配置按名称而非 ID 匹配，远端列表后续可能继续变化。
+OpenAI 分组和组件名称于 2026-10-10 从 [OpenAI 官方状态代理 JSON](https://status.openai.com/proxy/status.openai.com) 实际核对：`summary.components` 有 37 个组件，`summary.structure.items[].group` 列出其中 36 个的分组。相对旧列表，新增 `Agents`、`Decisions`、`dots`、`Space`，`Sora` 已不存在；`ChatGPT Atlas` 仍在组件索引中，但当前没有分组记录，因此不能使用 `ChatGPT/ChatGPT Atlas`。
+
+配置使用组件名或已有分组的 `分组/组件`，忽略大小写和两端空白，不按模型版本或子串匹配。组件索引来自 `summary.components`，受影响状态通过 `summary.affected_components[].component_id/status` 关联；没有受影响记录的有效组件视为正常。不存在的名称返回 `Unknown`，不会自动替换成其他组件。列表及分组仍可能继续变化。
+
+#### Google 组件及返回字段
+
+2026-10-10 实际调用 [Google AI Studio 状态页](https://aistudio.google.com/status) 使用的 `MakerSuiteService/ListIncidentsHistory` 接口，返回 63 条历史事件，组件 ID 仍为 `1/2/3`；本次所有事件的最后更新均为已解决，现有三个配置值解析正常。
+
+| `components` 配置值 | 接口组件 ID | 监控范围 |
+| --- | --- | --- |
+| `api` | 1 | Gemini API |
+| `multimodal live api` | 2 | Live API |
+| `google ai studio` | 3 | Google AI Studio |
+
+这些是客户端支持的配置值，忽略大小写和两端空白，不是模型名称，也不是从事件标题做关键词匹配。接口返回位置数组：`raw[0][0]` 是事件列表；每条事件的 `[1]` 是标题、`[2]` 是严重度（1=性能下降，2=中断）、`[3]` 是状态更新数组、`[5]` 是受影响组件 ID 数组。最后更新的 `[0]` 为 4 时表示已解决；组件过滤读取 `[5]`，而不是标题或旧的单值字段 `[4]`。本次未发现匹配 ID 或数组结构变化；该页面内部接口将来仍可能改变，无法解释的数据不会被当作正常；已确认的异常仍保留。
 
 ### DeepSeek 说明
 
-`deepseek` provider 优先使用 `https://status.deepseek.com/feed.rss`。如果标准 Go HTTP client 被状态站断连，会使用 Chrome-like uTLS 指纹重试。若 RSS 仍不可用，则直接探测服务：
+`deepseek` provider 优先使用 `https://status.deepseek.com/feed.rss`。如果标准 Go HTTP client 被状态站断连，会使用 Chrome-like uTLS 指纹重试。若 RSS 仍不可用，API 聚合与网页组件会直接探测服务：
 
 | 组件 | fallback 探测地址 |
 | --- | --- |
 | `API Service` | `https://api.deepseek.com/v1/models` |
 | `Web Chat Service` | `https://chat.deepseek.com` |
 
-直接探测只能推断 `Normal`、`Outage` 或 `Unknown`，不能可靠判断 `Degraded`；RSS 仍是优先数据源。
+直接探测只能推断 `Normal`、`Outage` 或 `Unknown`，不能可靠判断 `Degraded`；RSS 仍是优先数据源。API 地址的可达性不能分别证明 Pro 和 Flash 模型健康。
+
+2026-10-10 实际获取的 RSS 有 33 条事件，均为 `resolved`。`description` 的 `Affected components` 包含带版本号的 Pro API、Flash API、对话服务，以及上传文件和搜索服务。解析按服务角色识别独立词 `Pro`／`Flash`，不匹配品牌前缀或模型版本；`Chat Service`、`Chatservice` 和中文对话标签均可识别。服务归属读取 `Affected components`，不从笼统的“网页/API”标题推断。
+
+要分别显示三类服务，可以设置：
+
+```json
+"components": ["Pro API", "Flash API", "Web Chat Service"]
+```
+
+`API Service` 继续聚合全部 API，原配置无需迁移。仅 Flash 的事件不会影响 Pro；同家族不同模型版本归入同一服务角色。旧事件若只写“API 服务”而未区分家族，API 聚合项保留异常，Pro／Flash 显示 `Unknown` 并说明未细分；无法识别的活动服务标签保留诊断，已确认的异常不被丢弃。部分中断（`Partially Unavailable`／`partial outage`／“部分中断”）判为 `Degraded`，明确完全不可用判为 `Outage`；`monitoring` 仍是未解决状态。
+
+RSS 不可用时，`Pro API`／`Flash API` 返回 `Unknown`，不会把通用网关可达性当作模型健康；旧 `API Service` 和网页组件继续使用上表的直接探测。RSS 是事件历史，正常表示未发现已知未解决事件，不等于实际验证模型推理可用。将来版本号改变无需更新配置；服务角色词本身改变则仍需重新核对。
 
 [返回语言链接](#isllmalive)
 
@@ -260,7 +287,7 @@ Component filtering is not supported for `apiget` monitors.
 | OpenAI (`openai`) | See the recommended values grouped by the official status page below. |
 | Anthropic (`statuspage`) | `claude.ai`, `Claude Console (platform.claude.com)`, `Claude API (api.anthropic.com)`, `Claude Code`, `Claude Cowork`, `Claude for Government` |
 | Google (`google`) | `api`, `multimodal live api`, `google ai studio` |
-| DeepSeek (`deepseek`) | `API Service`, `Web Chat Service` |
+| DeepSeek (`deepseek`) | `Pro API`, `Flash API`, `Web Chat Service`; `API Service` combines all APIs for compatibility. |
 | Kimi (`statuspage`) | `Kimi`, `Website`, `Open API`, `API Service`, `Open Platform Portal`, `SaaS`, `Sign In / Sign Up`, `File uploads`, `Search`, `Model`, `Vision Model`, `Thinking Model`, `Text Model`, `Research Model`, `K2 Model`, `Agentic Model` |
 | Minimax (`statuspage`) | `Large Language Models (LLM)`, `Text-to-Speech`, `Video Generation`, `Music Generation` |
 
@@ -270,24 +297,51 @@ OpenAI accepts qualified `Group/Component` names, while unique components are be
 
 | Official group | Recommended `components` values |
 | --- | --- |
-| APIs | `Chat Completions`, `Responses`, `Fine-tuning`, `Embeddings`, `Images`, `Batch`, `Audio`, `Moderations`, `Realtime`, `Files`, `APIs/Login`, `Sora` |
-| ChatGPT | `Conversations`, `ChatGPT/Login`, `ChatGPT Work`, `Codex in ChatGPT Desktop`, `Compliance API`, `Search`, `File uploads`, `Voice mode`, `GPTs`, `Image Generation`, `Deep Research`, `Agent`, `ChatGPT Atlas`, `Sites`, `Connectors/Apps` |
+| APIs | `Chat Completions`, `Responses`, `Agents`, `Decisions`, `Fine-tuning`, `Embeddings`, `Images`, `Batch`, `Audio`, `Moderations`, `Realtime`, `Files`, `APIs/Login` |
+| ChatGPT | `Conversations`, `ChatGPT/Login`, `ChatGPT Work`, `Codex in ChatGPT Desktop`, `Compliance API`, `Search`, `File uploads`, `Voice mode`, `GPTs`, `Image Generation`, `Deep Research`, `Agent`, `dots`, `Space`, `Sites`, `Connectors/Apps` |
 | Codex | `Codex Web`, `Codex API`, `CLI`, `VS Code extension` |
 | FedRAMP | `FedRAMP` |
 | Ads Platform | `Ads Manager`, `Ads API` |
+| Not in the current grouping | `ChatGPT Atlas` (unqualified name only) |
 
-OpenAI groups and component names were verified on 2026-07-10 against `summary.structure` in the [official OpenAI status proxy JSON](https://status.openai.com/proxy/status.openai.com). Configuration matches by name rather than ID; the remote list may continue to change.
+Verified on 2026-10-10 against the [official OpenAI status proxy JSON](https://status.openai.com/proxy/status.openai.com): `summary.components` contains 37 components, while `summary.structure.items[].group` groups 36 of them. Since the previous list, `Agents`, `Decisions`, `dots`, and `Space` were added and `Sora` disappeared. `ChatGPT Atlas` remains in the component index but has no current group entry, so `ChatGPT/ChatGPT Atlas` does not match.
+
+Configuration matches component names or existing `Group/Component` names, ignoring case and surrounding whitespace; it does not match model versions or substrings. Components come from `summary.components`; affected states join through `summary.affected_components[].component_id/status`. Valid components without an affected-state entry are treated as normal. Missing names return `Unknown` and are not automatically replaced. Names and groups may change again.
+
+#### Google Components and Response Fields
+
+On 2026-10-10, the `MakerSuiteService/ListIncidentsHistory` endpoint used by the [Google AI Studio status page](https://aistudio.google.com/status) returned 63 historical incidents. Component IDs remain `1/2/3`; all latest updates in this capture were resolved, and the three existing configuration values parsed successfully.
+
+| `components` value | Response component ID | Scope |
+| --- | --- | --- |
+| `api` | 1 | Gemini API |
+| `multimodal live api` | 2 | Live API |
+| `google ai studio` | 3 | Google AI Studio |
+
+These are supported client configuration values, ignoring case and surrounding whitespace, rather than model names or incident-title keywords. The response uses positional arrays: `raw[0][0]` is the incident list; incident `[1]` is the title, `[2]` severity (1=degraded, 2=outage), `[3]` the update list, and `[5]` the affected component-ID array. The last update's `[0]` equals 4 when resolved. Filtering uses `[5]`, not the title or the older single-value field `[4]`. No ID or array-layout change was found in this capture; the internal page endpoint may still change; uninterpretable data is not assumed healthy, while confirmed faults remain visible.
 
 ### DeepSeek Notes
 
-The `deepseek` provider prefers `https://status.deepseek.com/feed.rss`. If the standard Go HTTP client is disconnected by the status host, it retries with a Chrome-like uTLS fingerprint. If RSS is still unavailable, it probes services directly:
+The `deepseek` provider prefers `https://status.deepseek.com/feed.rss`. If the standard Go HTTP client is disconnected by the status host, it retries with a Chrome-like uTLS fingerprint. If RSS is still unavailable, aggregate API and web components use direct probes:
 
 | Component | Fallback probe |
 | --- | --- |
 | `API Service` | `https://api.deepseek.com/v1/models` |
 | `Web Chat Service` | `https://chat.deepseek.com` |
 
-Direct probes can infer `Normal`, `Outage`, or `Unknown`, but not reliable `Degraded`; RSS remains the preferred source.
+Direct probes can infer `Normal`, `Outage`, or `Unknown`, but not reliable `Degraded`; RSS remains the preferred source. API endpoint reachability cannot establish Pro and Flash model health independently.
+
+The RSS captured on 2026-10-10 contained 33 incidents, all resolved. Its description's `Affected components` lists versioned Pro API and Flash API labels, chat, file upload, and search services. Parsing identifies the standalone service-role words `Pro`/`Flash`, without matching brand prefixes or model versions; `Chat Service`, `Chatservice`, and Chinese chat labels are recognized. Impact comes from `Affected components`, rather than broad Web/API incident titles.
+
+To display the three services independently, configure:
+
+```json
+"components": ["Pro API", "Flash API", "Web Chat Service"]
+```
+
+`API Service` still aggregates all APIs, preserving existing configurations. A Flash-only incident does not affect Pro; different model versions in the same family share a service role. Older incidents that only identify a general API service preserve the aggregate fault but leave Pro/Flash `Unknown` with a diagnostic. Unrecognized active service labels retain diagnostics without discarding confirmed faults. Partial outages (`Partially Unavailable`, `partial outage`, or Chinese partial-outage wording) map to `Degraded`; explicit full unavailability maps to `Outage`. `monitoring` remains unresolved.
+
+When RSS is unavailable, `Pro API`/`Flash API` return `Unknown`; a reachable gateway is not treated as model health. Legacy `API Service` and web chat retain the direct probes above. RSS is incident history: normal means no known unresolved incident, rather than verified inference availability. Version-number changes need no configuration update; changes to the service-role wording still require review.
 
 [Back to language links](#isllmalive)
 
