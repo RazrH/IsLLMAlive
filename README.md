@@ -33,7 +33,7 @@ IsLLMAlive 是一个轻量级 Go 桌面托盘应用，用来在后台监控 LLM 
 
 ### 安装
 
-从 [GitHub Releases 下载预编译版本](../../releases)，或使用 Go 1.24 及以上版本从源码构建。
+从 [GitHub Releases 下载预编译版本](../../releases)，或使用 Go 1.27.2 从源码构建。
 
 Linux 构建需要 GTK 和 AppIndicator 头文件：
 
@@ -97,7 +97,7 @@ go build -o isllmalive.exe ./cmd/isllmalive
 | `notify_on` | Bool | 是 | 单个 monitor 的通知开关。 |
 | `endpoint` | String | 按 provider 而定 | 状态获取端点。`statuspage` 使用状态页根地址；`deepseek` 使用 RSS feed；`apiget` 使用 API 探测端点或 API host。 |
 | `status_page` | String | 否 | 从托盘菜单打开的人类可读状态页。 |
-| `components` | String 数组 | 否 | 要监控的组件名数组，状态取其中最差值。省略或使用 `["none"]` 表示 page 级状态。 |
+| `components` | String 数组 | 否 | 要监控的组件名数组；已知异常优先，否则存在 Unknown 就保持 Unknown。省略或使用 `["none"]` 表示 page 级状态。 |
 | `component` | String | 否 | 旧版单组件兼容字段。仅在 `components` 为空时使用。 |
 
 ```json
@@ -203,7 +203,7 @@ User guide by Gemini-3.1-pro and GPT-5.5 (xhigh).
 
 ### Install
 
-Download pre-built binaries from [GitHub Releases](../../releases), or build from source with Go 1.24 or newer.
+Download pre-built binaries from [GitHub Releases](../../releases), or build from source with Go 1.27.2.
 
 Linux builds need GTK and AppIndicator headers:
 
@@ -267,7 +267,7 @@ Each monitor supports these fields:
 | `notify_on` | Bool | Yes | Per-monitor notification switch. |
 | `endpoint` | String | Provider-specific | Fetch endpoint. For `statuspage`, use the status page root; for `deepseek`, use the RSS feed; for `apiget`, use the API probe endpoint or base API host. |
 | `status_page` | String | No | Human-readable status page opened from the tray menu. |
-| `components` | String array | No | Component names aggregated by one monitor; the worst status is used. Omit it or use `["none"]` for page-level status. |
+| `components` | String array | No | Component names aggregated by one monitor; confirmed faults win, otherwise any Unknown keeps the result Unknown. Omit it or use `["none"]` for page-level status. |
 | `component` | String | No | Legacy single-component compatibility field, used only when `components` is empty. |
 
 ```json
@@ -293,7 +293,7 @@ Component filtering is not supported for `apiget` monitors.
 
 #### OpenAI Components
 
-OpenAI accepts qualified `Group/Component` names, while unique components are best configured by component name alone. The two `Login` components are best written as `APIs/Login` or `ChatGPT/Login`; unqualified `Login` aggregates their worst status. For example, `Codex/Codex API` is supported, but `Codex API` is the recommended shorthand.
+OpenAI accepts qualified `Group/Component` names, while unique components are best configured by component name alone. The two `Login` components are best written as `APIs/Login` or `ChatGPT/Login`; unqualified `Login` aggregates all matching components using the same uncertainty-preserving rule. For example, `Codex/Codex API` is supported, but `Codex API` is the recommended shorthand.
 
 | Official group | Recommended `components` values |
 | --- | --- |
@@ -344,15 +344,3 @@ To display the three services independently, configure:
 When RSS is unavailable, `Pro API`/`Flash API` return `Unknown`; a reachable gateway is not treated as model health. Legacy `API Service` and web chat retain the direct probes above. RSS is incident history: normal means no known unresolved incident, rather than verified inference availability. Version-number changes need no configuration update; changes to the service-role wording still require review.
 
 [Back to language links](#isllmalive)
-
-## Development baseline / 开发基线
-
-Use Go 1.27.0. Windows builds use CGO_ENABLED=0; Linux needs GTK3/AppIndicator development packages. Go 1.27 macOS builds require macOS 13 or later.
-
-使用 Go 1.27.0，先构建再运行。诊断菜单按需显示运行时内存、goroutine、每轮请求数及耗时。只有显式传入 `--profile-dir <目录>` 后，打开诊断时才写出 heap/allocs/goroutine pprof 文件；默认不开调试端口、不强制 GC。采样文件可能含敏感信息，不要公开上传。
-
-原常驻内存 <10MB 目标仍未达成；约40MB用户实测不是Go存活堆口径。
-
-Development and validation details: [DEVELOPMENT.md](DEVELOPMENT.md). 开发环境、可信度规则与验收记录见 [开发说明](DEVELOPMENT.md) 及 [上下文](CONTEXT.md)。
-
-Within one monitor, Normal + Unknown is Unknown; confirmed Degraded/Outage still wins. 同一监控内，只有全部所选组件有效且正常才显示正常；跨监控托盘严重度顺序不变。

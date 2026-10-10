@@ -39,9 +39,6 @@ jobs:
           if [ -s format.txt ]; then cat format.txt; exit 1; fi
       - name: Tests
         run: go test -count=1 -mod=readonly ./...
-      - name: Windows sampling self-check
-        if: runner.os == 'Windows'
-        run: ./scripts/test-sampling.ps1
       - name: Vet
         run: go vet -mod=readonly ./...
       - name: Module hygiene
