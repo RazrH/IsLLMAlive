@@ -224,7 +224,7 @@ func Update(results []providers.MonitorResult, lang string) {
 	var anomalyMsgs []string
 	for _, res := range results {
 		if res.Status != status.Normal {
-			anomalyMsgs = append(anomalyMsgs, fmt.Sprintf("%s: %s", res.Name, monitorDetail(res, lang)))
+			anomalyMsgs = append(anomalyMsgs, fmt.Sprintf("%s: %s", res.Name, translateStatus(res.Status, lang)))
 		}
 	}
 
