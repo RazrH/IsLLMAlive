@@ -1,11 +1,12 @@
 module isllmalive
 
-go 1.24
+go 1.27.2
 
-require github.com/getlantern/systray v1.2.2
+godebug fips140=off
 
 require (
 	github.com/fsnotify/fsnotify v1.7.0
+	github.com/getlantern/systray v1.2.2
 	github.com/refraction-networking/utls v1.8.2
 )
 

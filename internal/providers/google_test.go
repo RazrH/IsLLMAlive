@@ -8,11 +8,11 @@ import (
 )
 
 func TestGoogleMultipleComponentsUseWorstStatus(t *testing.T) {
-	incidents := []interface{}{
-		[]interface{}{nil, "API degraded", float64(1), []interface{}{[]interface{}{float64(1)}}, nil, []interface{}{float64(1)}},
-		[]interface{}{nil, "Studio outage", float64(2), []interface{}{[]interface{}{float64(1)}}, nil, []interface{}{float64(3)}},
+	incidents := []any{
+		[]any{nil, "API degraded", float64(1), []any{[]any{float64(1)}}, nil, []any{float64(1)}},
+		[]any{nil, "Studio outage", float64(2), []any{[]any{float64(1)}}, nil, []any{float64(3)}},
 	}
-	rawData := []interface{}{[]interface{}{[]interface{}{incidents}}}
+	rawData := []any{[]any{incidents}}
 
 	got := (&GoogleProvider{}).parseData(rawData, config.MonitorConfig{
 		Components: []string{"api", "google ai studio", "unsupported"},

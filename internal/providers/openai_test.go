@@ -1,7 +1,6 @@
 package providers
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -21,7 +20,7 @@ func TestOpenAIMultipleComponentsUseWorstStatus(t *testing.T) {
 	openAIEndpoint = server.URL
 	t.Cleanup(func() { openAIEndpoint = originalEndpoint })
 
-	got := (&OpenAIProvider{}).Fetch(context.Background(), config.MonitorConfig{Name: "OpenAI", Components: []string{"API", "Web"}})
+	got := (&OpenAIProvider{}).Fetch(t.Context(), config.MonitorConfig{Name: "OpenAI", Components: []string{"API", "Web"}})
 
 	if got.Status != status.Outage {
 		t.Fatalf("Status = %s, want Outage", got.Status)

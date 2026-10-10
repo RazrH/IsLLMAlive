@@ -1,15 +1,14 @@
 package providers
 
 import (
-	"bytes"
 	"context"
 	"encoding/xml"
 	"fmt"
 	"html"
-	"io"
 	"net"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -25,15 +24,18 @@ const (
 )
 
 var (
-	deepSeekAPIProbeURL = "https://api.deepseek.com/v1/models"
-	deepSeekWebProbeURL = "https://chat.deepseek.com"
+	deepSeekStatusPattern     = regexp.MustCompile(`(?is)<strong>\s*Status:\s*</strong>\s*([^<]+)`)
+	deepSeekComponentsPattern = regexp.MustCompile(`(?is)<strong>\s*Affected components:\s*</strong>\s*([^<]+)`)
+	deepSeekAPIProbeURL       = "https://api.deepseek.com/v1/models"
+	deepSeekWebProbeURL       = "https://chat.deepseek.com"
 )
 
 // DeepSeekProvider implements DeepSeek status monitoring from its Flashduty RSS feed.
 type DeepSeekProvider struct{}
 
 type deepSeekRSS struct {
-	Channel deepSeekRSSChannel `xml:"channel"`
+	XMLName xml.Name            `xml:"rss"`
+	Channel *deepSeekRSSChannel `xml:"channel"`
 }
 
 type deepSeekRSSChannel struct {
@@ -58,67 +60,8 @@ type deepSeekIncident struct {
 }
 
 func (p *DeepSeekProvider) Fetch(ctx context.Context, monitor config.MonitorConfig) MonitorResult {
-	result := MonitorResult{
-		Key:        monitor.Name,
-		Name:       monitor.Name,
-		Status:     status.Unknown,
-		CheckedAt:  time.Now(),
-		StatusPage: deepSeekDefaultStatusPage,
-	}
-
-	endpoint := strings.TrimSpace(monitor.Endpoint)
-	if endpoint == "" {
-		endpoint = deepSeekDefaultFeedURL
-	}
-
-	client := &http.Client{Timeout: 3 * time.Second}
-	utlsClient := newDeepSeekUTLSHTTPClient(3 * time.Second)
-	var lastErr error
-	var lastMessage string
-
-	for attempt := 1; attempt <= 3; attempt++ {
-		body, message, err := fetchDeepSeekRSS(ctx, client, endpoint, "standard")
-		if err == nil {
-			return parseDeepSeekRSS(body, monitor, result, time.Now())
-		}
-
-		lastMessage = message
-		lastErr = err
-
-		utlsBody, utlsMessage, utlsErr := fetchDeepSeekRSS(ctx, utlsClient, endpoint, "utls-chrome")
-		if utlsErr == nil {
-			parsed := parseDeepSeekRSS(utlsBody, monitor, result, time.Now())
-			if parsed.Err == nil {
-				parsed.Message = "utls-chrome RSS fetch succeeded after standard fetch failed; " + parsed.Message
-			} else {
-				parsed.Message = "utls-chrome RSS fetch succeeded after standard fetch failed, but RSS parse failed; " + parsed.Message
-			}
-			return parsed
-		}
-
-		if lastErr != nil {
-			lastMessage = fmt.Sprintf("%s; utls_fallback=%s", lastMessage, utlsMessage)
-			lastErr = fmt.Errorf("standard fetch failed: %w; utls-chrome fetch failed: %v", lastErr, utlsErr)
-		} else {
-			lastMessage = utlsMessage
-			lastErr = utlsErr
-		}
-
-		if attempt < 3 {
-			backoff := time.Duration(1<<attempt) * time.Second
-			select {
-			case <-ctx.Done():
-				result.Message = "Context cancelled"
-				result.Err = ctx.Err()
-				return result
-			case <-time.After(backoff):
-			}
-		}
-	}
-
-	result.Message = lastMessage
-	result.Err = lastErr
-	return fallbackDeepSeekDirectProbe(ctx, monitor, result, lastMessage, lastErr)
+	monitor.Type = "deepseek"
+	return fetchStandalone(ctx, monitor)
 }
 
 func fetchDeepSeekRSS(ctx context.Context, client *http.Client, endpoint, mode string) ([]byte, string, error) {
@@ -131,7 +74,7 @@ func fetchDeepSeekRSS(ctx context.Context, client *http.Client, endpoint, mode s
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 	req.Header.Set("Cache-Control", "no-cache")
 
-	resp, err := client.Do(req)
+	resp, err := doRequest(client, req)
 	if err != nil {
 		return nil, fmt.Sprintf("%s network error fetching %s", mode, endpoint), err
 	}
@@ -141,7 +84,7 @@ func fetchDeepSeekRSS(ctx context.Context, client *http.Client, endpoint, mode s
 		return nil, fmt.Sprintf("%s RSS request returned HTTP %d from %s", mode, resp.StatusCode, endpoint), fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readResponse(resp.Body)
 	if err != nil {
 		return nil, fmt.Sprintf("%s read error from %s", mode, endpoint), err
 	}
@@ -185,6 +128,7 @@ func newDeepSeekUTLSHTTPClient(timeout time.Duration) *http.Client {
 			return tlsConn, nil
 		},
 	}
+	configureTransport(transport)
 	return &http.Client{Timeout: timeout, Transport: transport}
 }
 
@@ -235,18 +179,18 @@ func fallbackDeepSeekDirectProbe(ctx context.Context, monitor config.MonitorConf
 	probes = append(probes, probeDeepSeekService(ctx, client, "web", deepSeekWebProbeURL))
 
 	worstStatus := status.Normal
-	allUnknown := true
+	hasUnknown := false
 	parts := make([]string, 0, len(probes)+1)
 	for _, probe := range probes {
 		parts = append(parts, probe.Message)
-		if probe.Status != status.Unknown {
-			allUnknown = false
+		if probe.Status == status.Unknown {
+			hasUnknown = true
 		}
 		if probe.Status > worstStatus {
 			worstStatus = probe.Status
 		}
 	}
-	if allUnknown {
+	if hasUnknown && worstStatus == status.Normal {
 		worstStatus = status.Unknown
 	}
 
@@ -273,7 +217,7 @@ func probeDeepSeekService(ctx context.Context, client *http.Client, name, endpoi
 	req.Header.Set("User-Agent", "IsLLMAlive-Monitor/1.0")
 	req.Header.Set("Accept", "*/*")
 
-	resp, err := client.Do(req)
+	resp, err := doRequest(client, req)
 	if err != nil {
 		return deepSeekProbeResult{
 			Name:    name,
@@ -303,90 +247,12 @@ func probeDeepSeekService(ctx context.Context, client *http.Client, name, endpoi
 	}
 }
 
-func parseDeepSeekRSS(data []byte, monitor config.MonitorConfig, result MonitorResult, now time.Time) MonitorResult {
-	var feed deepSeekRSS
-	decoder := xml.NewDecoder(bytes.NewReader(data))
-	if err := decoder.Decode(&feed); err != nil {
-		result.Message = "Parse error"
-		result.Err = err
-		return result
+func parseDeepSeekRSS(data []byte, m config.MonitorConfig, b MonitorResult, now time.Time) MonitorResult {
+	s, err := decodeDeepSeekSnapshot(data, now)
+	if err != nil {
+		return incomplete(b, err)
 	}
-
-	latestByIncident := make(map[string]deepSeekIncident)
-	parsedItems := 0
-	var latestPublished time.Time
-	for _, item := range feed.Channel.Items {
-		incident, err := parseDeepSeekRSSItem(item)
-		if err != nil {
-			continue
-		}
-		parsedItems++
-		if incident.Published.After(latestPublished) {
-			latestPublished = incident.Published
-		}
-		if incident.Published.After(now.Add(5 * time.Minute)) {
-			continue
-		}
-
-		key := incident.Link
-		if key == "" {
-			key = item.GUID
-		}
-		if key == "" {
-			key = incident.Title
-		}
-
-		prev, exists := latestByIncident[key]
-		if !exists || incident.Published.After(prev.Published) {
-			latestByIncident[key] = incident
-		}
-	}
-
-	if len(feed.Channel.Items) > 0 && parsedItems == 0 {
-		result.Message = fmt.Sprintf("Parse error: feed_items=%d parsed_items=0", len(feed.Channel.Items))
-		result.Err = fmt.Errorf("no parseable deepseek rss items")
-		return result
-	}
-
-	if componentNames := monitor.ComponentNames(); len(componentNames) > 0 {
-		componentStatuses := make([]ComponentStatus, 0, len(componentNames))
-		activeCounts := make([]int, 0, len(componentNames))
-		var unsupported []string
-		for _, name := range componentNames {
-			target := normalizeDeepSeekComponent(name)
-			if target == "" {
-				componentStatuses = append(componentStatuses, ComponentStatus{Name: name, Status: status.Unknown, Message: "Unsupported component"})
-				activeCounts = append(activeCounts, 0)
-				unsupported = append(unsupported, name)
-				continue
-			}
-			componentStatus, message, activeCount := evaluateDeepSeekIncidents(latestByIncident, target)
-			componentStatuses = append(componentStatuses, ComponentStatus{Name: name, Status: componentStatus, Message: message})
-			activeCounts = append(activeCounts, activeCount)
-		}
-		result = aggregateComponentStatuses(result, componentStatuses)
-		if len(componentStatuses) == 1 && len(unsupported) == 0 {
-			result.Message = deepSeekRSSSummary(componentStatuses[0].Message, len(feed.Channel.Items), parsedItems, activeCounts[0], latestPublished)
-		}
-		if len(unsupported) > 0 {
-			result.Err = fmt.Errorf("unsupported deepseek components: %s", strings.Join(unsupported, ", "))
-		}
-		return result
-	}
-
-	result.Status, result.Message, _ = evaluateDeepSeekIncidents(latestByIncident, "")
-	if result.Status == status.Normal {
-		result.Message = deepSeekRSSSummary("operational", len(feed.Channel.Items), parsedItems, 0, latestPublished)
-	} else {
-		activeCount := 0
-		for _, incident := range latestByIncident {
-			if !strings.EqualFold(strings.TrimSpace(incident.StatusText), "resolved") {
-				activeCount++
-			}
-		}
-		result.Message = deepSeekRSSSummary(result.Message, len(feed.Channel.Items), parsedItems, activeCount, latestPublished)
-	}
-	return result
+	return s.evaluate(m, b)
 }
 
 func evaluateDeepSeekIncidents(latestByIncident map[string]deepSeekIncident, targetComponent string) (status.Status, string, int) {
@@ -428,20 +294,39 @@ func parseDeepSeekRSSItem(item deepSeekRSSItem) (deepSeekIncident, error) {
 	description := html.UnescapeString(item.Description)
 	statusText := extractDeepSeekDescriptionField(description, "Status")
 	componentsText := extractDeepSeekDescriptionField(description, "Affected components")
+	components := parseDeepSeekComponents(componentsText)
+	if strings.TrimSpace(item.Title) == "" {
+		return deepSeekIncident{}, fmt.Errorf("RSS item title missing")
+	}
+	switch strings.ToLower(strings.TrimSpace(statusText)) {
+	case "resolved", "investigating", "identified", "monitoring":
+	default:
+		return deepSeekIncident{}, fmt.Errorf("unknown RSS incident status: %q", statusText)
+	}
+	if !strings.EqualFold(strings.TrimSpace(statusText), "resolved") && len(components) == 0 {
+		return deepSeekIncident{}, fmt.Errorf("active RSS incident has no interpretable components")
+	}
 
 	return deepSeekIncident{
 		Title:      strings.TrimSpace(item.Title),
 		Link:       strings.TrimSpace(item.Link),
 		StatusText: strings.TrimSpace(statusText),
-		Components: parseDeepSeekComponents(componentsText),
+		Components: components,
 		Published:  published,
 		Severity:   classifyDeepSeekSeverity(item.Title),
 	}, nil
 }
 
 func extractDeepSeekDescriptionField(description, label string) string {
-	pattern := fmt.Sprintf(`(?is)<strong>\s*%s:\s*</strong>\s*([^<]+)`, regexp.QuoteMeta(label))
-	matches := regexp.MustCompile(pattern).FindStringSubmatch(description)
+	pattern := deepSeekStatusPattern
+	switch label {
+	case "Status":
+	case "Affected components":
+		pattern = deepSeekComponentsPattern
+	default:
+		return ""
+	}
+	matches := pattern.FindStringSubmatch(description)
 	if len(matches) < 2 {
 		return ""
 	}
@@ -460,13 +345,8 @@ func parseDeepSeekComponents(text string) []string {
 	return components
 }
 
-func deepSeekIncidentAffectsComponent(incident deepSeekIncident, targetComponent string) bool {
-	for _, component := range incident.Components {
-		if component == targetComponent {
-			return true
-		}
-	}
-	return false
+func deepSeekIncidentAffectsComponent(incident deepSeekIncident, target string) bool {
+	return slices.Contains(incident.Components, target)
 }
 
 func normalizeDeepSeekComponent(component string) string {

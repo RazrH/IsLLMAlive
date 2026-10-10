@@ -1,15 +1,11 @@
 package providers
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"regexp"
 	"strings"
-	"time"
 
 	"isllmalive/internal/config"
 	"isllmalive/internal/status"
@@ -28,22 +24,22 @@ func mapGoogleComponent(name string) float64 {
 	return -1 // Unknown component
 }
 
-type GoogleProvider struct {
-	cachedAPIKey string
-}
+var googleStatusURL = "https://aistudio.google.com/status"
+
+type GoogleProvider struct{}
+
+var googleKeyPattern = regexp.MustCompile(`"WIu0Nc"\s*:\s*"([^"]+)"`)
+var googleFallbackKeyPattern = regexp.MustCompile(`AIza[0-9A-Za-z-_]+`)
 
 func (p *GoogleProvider) fetchAPIKey(ctx context.Context, client *http.Client) (string, error) {
-	if p.cachedAPIKey != "" {
-		return p.cachedAPIKey, nil
-	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://aistudio.google.com/status", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, googleStatusURL, nil)
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36")
 
-	resp, err := client.Do(req)
+	resp, err := doRequest(client, req)
 	if err != nil {
 		return "", err
 	}
@@ -53,235 +49,89 @@ func (p *GoogleProvider) fetchAPIKey(ctx context.Context, client *http.Client) (
 		return "", fmt.Errorf("failed to fetch status page, status: %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readResponse(resp.Body)
 	if err != nil {
 		return "", err
 	}
 
 	html := string(body)
-	matches := regexp.MustCompile(`"WIu0Nc"\s*:\s*"([^"]+)"`).FindStringSubmatch(html)
+	matches := googleKeyPattern.FindStringSubmatch(html)
 	if len(matches) > 1 {
-		p.cachedAPIKey = matches[1]
-		return p.cachedAPIKey, nil
+		return strings.Clone(matches[1]), nil
 	}
 
 	// Fallback to first AIza key
-	allKeys := regexp.MustCompile(`AIza[0-9A-Za-z-_]+`).FindAllString(html, -1)
+	allKeys := googleFallbackKeyPattern.FindAllString(html, 2)
 	if len(allKeys) > 1 {
-		p.cachedAPIKey = allKeys[1]
-		return p.cachedAPIKey, nil
+		return strings.Clone(allKeys[1]), nil
 	} else if len(allKeys) > 0 {
-		p.cachedAPIKey = allKeys[0]
-		return p.cachedAPIKey, nil
+		return strings.Clone(allKeys[0]), nil
 	}
 
 	return "", fmt.Errorf("API key not found in HTML")
 }
 
 func (p *GoogleProvider) Fetch(ctx context.Context, monitor config.MonitorConfig) MonitorResult {
-	result := MonitorResult{
-		Key:        monitor.Name,
-		Name:       monitor.Name,
-		Status:     status.Unknown,
-		CheckedAt:  time.Now(),
-		StatusPage: "https://aistudio.google.com/status",
-	}
+	monitor.Type = "google"
+	return fetchStandalone(ctx, monitor)
+}
 
-	endpoint := "https://alkalimakersuite-pa.clients6.google.com/$rpc/google.internal.alkali.applications.makersuite.v1.MakerSuiteService/ListIncidentsHistory"
-
-	// 3s local timeout per request to avoid blocking parent ctx for too long on stalls
-	client := &http.Client{Timeout: 3 * time.Second}
-	var lastErr error
-	var lastMessage string
-
-	// 1. First fetch the main page to get the API Key
-	apiKey, err := p.fetchAPIKey(ctx, client)
+func (p *GoogleProvider) parseData(raw []any, m config.MonitorConfig, b MonitorResult) MonitorResult {
+	s, err := decodeGoogleSnapshot(raw)
 	if err != nil {
-		result.Message = "Failed to get API Key"
-		result.Err = err
-		return result
+		return incomplete(b, err)
 	}
-
-	payload := []byte(`[]`)
-
-	for attempt := 1; attempt <= 3; attempt++ {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewBuffer(payload))
-		if err != nil {
-			result.Message = "Failed to create request"
-			result.Err = err
-			return result
-		}
-		req.Header.Set("Content-Type", "application/json+protobuf")
-		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36")
-		req.Header.Set("Origin", "https://aistudio.google.com")
-		req.Header.Set("Referer", "https://aistudio.google.com/")
-		req.Header.Set("Accept", "*/*")
-		req.Header.Set("x-goog-api-key", apiKey)
-
-		resp, err := client.Do(req)
-		if err == nil {
-			if resp.StatusCode == http.StatusOK {
-				var rawData []interface{}
-				err = json.NewDecoder(resp.Body).Decode(&rawData)
-				resp.Body.Close()
-
-				if err == nil {
-					return p.parseData(rawData, monitor, result)
-				} else {
-					lastMessage = "Parse error"
-					lastErr = err
-				}
-			} else {
-				lastMessage = fmt.Sprintf("HTTP %d", resp.StatusCode)
-				lastErr = fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-				resp.Body.Close()
-			}
-		} else {
-			lastMessage = "Network error"
-			lastErr = err
-		}
-
-		if attempt < 3 {
-			backoff := time.Duration(1<<attempt) * time.Second
-			select {
-			case <-ctx.Done():
-				result.Message = "Context cancelled"
-				result.Err = ctx.Err()
-				return result
-			case <-time.After(backoff):
-			}
-		}
-	}
-
-	result.Message = lastMessage
-	result.Err = lastErr
-	return result
+	return s.evaluate(m, b)
 }
 
-// parseData uses strict type assertions to navigate the deeply nested JSON array.
-// It avoids panics and returns Unknown gracefully if the format unexpectedly changes.
-func (p *GoogleProvider) parseData(rawData []interface{}, monitor config.MonitorConfig, result MonitorResult) MonitorResult {
-	// Expected structure: [ [ [ [ incidents... ] ] ] ]
-	if len(rawData) == 0 {
-		return failSafe(result, "Empty root array")
+func parseGoogleIncident(raw any) (status.Status, string, []float64, bool, error) {
+	bad := func(reason string) (status.Status, string, []float64, bool, error) {
+		return status.Unknown, "", nil, false, fmt.Errorf("%s", reason)
 	}
-	level1, ok := rawData[0].([]interface{})
-	if !ok || len(level1) == 0 {
-		return failSafe(result, "Level 1 missing")
+	inc, ok := raw.([]any)
+	if !ok || len(inc) < 4 {
+		return bad("invalid incident record")
 	}
-	level2, ok := level1[0].([]interface{})
-	if !ok || len(level2) == 0 {
-		return failSafe(result, "Level 2 missing")
+	title, ok := inc[1].(string)
+	if !ok || strings.TrimSpace(title) == "" {
+		return bad("title missing")
 	}
-	incidents, ok := level2[0].([]interface{})
-	if !ok {
-		return failSafe(result, "Incidents array missing")
+	severity, ok := inc[2].(float64)
+	if !ok || (severity != 1 && severity != 2) {
+		return bad("unknown severity")
 	}
-
-	if componentNames := monitor.ComponentNames(); len(componentNames) > 0 {
-		componentStatuses := make([]ComponentStatus, 0, len(componentNames))
-		var unsupported []string
-		for _, name := range componentNames {
-			componentID := mapGoogleComponent(name)
-			if componentID == -1 {
-				componentStatuses = append(componentStatuses, ComponentStatus{Name: name, Status: status.Unknown, Message: "Unsupported component"})
-				unsupported = append(unsupported, name)
-				continue
-			}
-			componentStatus, message := evaluateGoogleIncidents(incidents, componentID)
-			componentStatuses = append(componentStatuses, ComponentStatus{Name: name, Status: componentStatus, Message: message})
-		}
-		result = aggregateComponentStatuses(result, componentStatuses)
-		if len(unsupported) > 0 {
-			result.Err = fmt.Errorf("unsupported google components: %s", strings.Join(unsupported, ", "))
-		}
-		return result
+	updates, ok := inc[3].([]any)
+	if !ok || len(updates) == 0 {
+		return bad("updates missing")
 	}
-
-	result.Status, result.Message = evaluateGoogleIncidents(incidents, -1)
-	return result
-}
-
-func evaluateGoogleIncidents(incidents []interface{}, targetCompID float64) (status.Status, string) {
-	var activeIncidents []string
-	maxSev := status.Normal
-
-	for _, incRaw := range incidents {
-		inc, ok := incRaw.([]interface{})
-		if !ok || len(inc) < 4 {
-			continue // Skip malformed incident
-		}
-
-		// incident[1] is title
-		title := "Unknown Incident"
-		if t, ok := inc[1].(string); ok {
-			title = t
-		}
-
-		// incident[2] is severity (1=Degraded, 2=Outage)
-		sevVal := float64(1)
-		if s, ok := inc[2].(float64); ok {
-			sevVal = s
-		}
-
-		// incident[3] is updates array
-		updates, ok := inc[3].([]interface{})
-		if !ok || len(updates) == 0 {
-			continue
-		}
-
-		// Get last update
-		lastUpdateRaw := updates[len(updates)-1]
-		lastUpdate, ok := lastUpdateRaw.([]interface{})
-		if !ok || len(lastUpdate) == 0 {
-			continue
-		}
-
-		statusCode, ok := lastUpdate[0].(float64)
+	update, ok := updates[len(updates)-1].([]any)
+	if !ok || len(update) == 0 {
+		return bad("invalid last update")
+	}
+	code, ok := update[0].(float64)
+	if !ok || (code != 1 && code != 2 && code != 3 && code != 4) {
+		return bad("unknown incident state")
+	}
+	var components []float64
+	if len(inc) > 5 {
+		values, ok := inc[5].([]any)
 		if !ok {
-			continue
+			return bad("invalid components")
 		}
-
-		// 4 = Resolved
-		if statusCode == 4 {
-			continue
-		}
-
-		// Active Incident! Now check component filtering if needed.
-		if targetCompID != -1 && len(inc) > 5 {
-			comps, ok := inc[5].([]interface{})
-			if ok {
-				found := false
-				for _, c := range comps {
-					if cFloat, ok := c.(float64); ok && cFloat == targetCompID {
-						found = true
-						break
-					}
-				}
-				if !found {
-					continue // This active incident doesn't affect the monitored component
-				}
+		components = make([]float64, 0, len(values))
+		for _, v := range values {
+			c, ok := v.(float64)
+			if !ok || c < 1 || c != float64(int64(c)) {
+				return bad("invalid component identity")
 			}
+			components = append(components, c)
 		}
-
-		// Map Severity
-		var mappedSev status.Status
-		if sevVal == 2 {
-			mappedSev = status.Outage
-		} else {
-			mappedSev = status.Degraded
-		}
-
-		if mappedSev > maxSev {
-			maxSev = mappedSev
-		}
-		activeIncidents = append(activeIncidents, title)
 	}
-
-	if maxSev == status.Normal {
-		return maxSev, "operational"
+	mapped := status.Degraded
+	if severity == 2 {
+		mapped = status.Outage
 	}
-	return maxSev, strings.Join(activeIncidents, ", ")
+	return mapped, title, components, code == 4, nil
 }
 
 func failSafe(result MonitorResult, reason string) MonitorResult {

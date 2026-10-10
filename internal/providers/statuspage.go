@@ -2,11 +2,6 @@ package providers
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"net/http"
-	"strings"
-	"time"
 
 	"isllmalive/internal/config"
 	"isllmalive/internal/status"
@@ -32,120 +27,10 @@ type spComponent struct {
 }
 
 func (p *StatuspageProvider) Fetch(ctx context.Context, monitor config.MonitorConfig) MonitorResult {
-	result := MonitorResult{
-		Key:       monitor.Name,
-		Name:      monitor.Name,
-		Status:    status.Unknown,
-		CheckedAt: time.Now(),
-	}
-
-	endpoint := strings.TrimSuffix(monitor.Endpoint, "/")
-	if !strings.HasSuffix(endpoint, "/api/v2/summary.json") {
-		endpoint += "/api/v2/summary.json"
-	}
-
-	// Set a short local timeout for each HTTP request (e.g., 3s)
-	// so that a complete network stall triggers the retry loop
-	// rather than blocking until the parent ctx (15s) times out.
-	client := &http.Client{Timeout: 3 * time.Second}
-	var lastErr error
-	var lastMessage string
-
-	for attempt := 1; attempt <= 3; attempt++ {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-		if err != nil {
-			result.Message = "Failed to create request"
-			result.Err = err
-			return result
-		}
-
-		req.Header.Set("User-Agent", "IsLLMAlive/1.0")
-		req.Header.Set("Accept", "application/json")
-
-		resp, err := client.Do(req)
-		if err == nil {
-			if resp.StatusCode == http.StatusOK {
-				var summary spSummary
-				err = json.NewDecoder(resp.Body).Decode(&summary)
-				resp.Body.Close()
-
-				if err == nil {
-					// Component level
-					if componentNames := monitor.ComponentNames(); len(componentNames) > 0 {
-						componentStatuses := make([]ComponentStatus, 0, len(componentNames))
-						var missing []string
-						for _, name := range componentNames {
-							found := false
-							for _, comp := range summary.Components {
-								if strings.EqualFold(comp.Name, name) {
-									componentStatuses = append(componentStatuses, ComponentStatus{Name: name, Status: mapComponentStatus(comp.Status), Message: comp.Status})
-									found = true
-									break
-								}
-							}
-							if !found {
-								componentStatuses = append(componentStatuses, ComponentStatus{Name: name, Status: status.Unknown, Message: "Component not found"})
-								missing = append(missing, name)
-							}
-						}
-						result = aggregateComponentStatuses(result, componentStatuses)
-						if len(missing) > 0 {
-							result.Err = fmt.Errorf("components not found: %s", strings.Join(missing, ", "))
-						}
-						return result
-					}
-
-					// Page level
-					result.Status = mapIndicator(summary.Status.Indicator)
-					result.Message = summary.Status.Description
-
-					// Fallback if indicator is missing or unrecognizable, but we have components
-					if result.Status == status.Unknown && len(summary.Components) > 0 {
-						worstStatus := status.Normal
-						for _, comp := range summary.Components {
-							s := mapComponentStatus(comp.Status)
-							if s > worstStatus {
-								worstStatus = s
-							}
-						}
-						result.Status = worstStatus
-						if result.Message == "" {
-							result.Message = "Inferred from components"
-						}
-					}
-					return result
-				} else {
-					lastMessage = "Parse error"
-					lastErr = err
-				}
-			} else {
-				lastMessage = fmt.Sprintf("HTTP %d", resp.StatusCode)
-				lastErr = fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-				resp.Body.Close()
-			}
-		} else {
-			lastMessage = "Network error"
-			lastErr = err
-		}
-
-		if attempt < 3 {
-			backoff := time.Duration(1<<attempt) * time.Second // 2s, then 4s
-			select {
-			case <-ctx.Done():
-				result.Message = "Context cancelled"
-				result.Err = ctx.Err()
-				return result
-			case <-time.After(backoff):
-			}
-		}
-	}
-
-	result.Message = lastMessage
-	result.Err = lastErr
-	return result
+	monitor.Type = "statuspage"
+	return fetchStandalone(ctx, monitor)
 }
 
-// mapComponentStatus maps Statuspage component status to our Status model
 func mapComponentStatus(spStatusStr string) status.Status {
 	switch spStatusStr {
 	case "operational":

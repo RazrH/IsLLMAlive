@@ -29,6 +29,7 @@ func TestDiagnosticsIncludesProviderFailureDetails(t *testing.T) {
 			},
 		},
 	})
+	t.Cleanup(a.Stop)
 	a.lastResults = []providers.MonitorResult{
 		{
 			Name:       "DeepSeek",

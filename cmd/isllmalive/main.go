@@ -1,7 +1,9 @@
 package main
 
 import (
+	"flag"
 	"fmt"
+	"isllmalive/internal/diagnostics"
 	"log"
 	"os"
 	"os/exec"
@@ -14,12 +16,15 @@ import (
 )
 
 var (
+	profileDir string
 	appConfig  *config.Config
 	configPath string
 	mainApp    *app.App
 )
 
 func main() {
+	flag.StringVar(&profileDir, "profile-dir", "", "write local heap/allocs/goroutine profiles when opening diagnostics")
+	flag.Parse()
 	fmt.Println("Starting IsLLMAlive Phase 4...")
 
 	var err error
@@ -42,12 +47,10 @@ func onReady() {
 
 	fmt.Println("Tray UI initialized, starting polling...")
 	mainApp.Start()
+	startMeasurements()
 
 	// Start watching config.json for hot reloads
-	err := config.Watch(configPath, func() {
-		fmt.Println("Config file change detected. Reloading...")
-		mainApp.ReloadConfig()
-	})
+	err := mainApp.WatchConfig(configPath)
 	if err != nil {
 		fmt.Printf("Warning: Failed to start config watcher: %v\n", err)
 	}
@@ -59,6 +62,9 @@ func onConfig() {
 }
 
 func onDiagnostics() {
+	if err := diagnostics.WriteProfiles(profileDir); err != nil {
+		log.Printf("Profile export failed: %v", err)
+	}
 	exePath, err := os.Executable()
 	if err != nil {
 		fmt.Printf("Failed to resolve executable path for diagnostics: %v\n", err)
@@ -93,5 +99,10 @@ func openFile(path string) {
 }
 
 func onExit() {
+	stopMeasurements()
+	tray.Stop()
+	if mainApp != nil {
+		mainApp.Stop()
+	}
 	fmt.Println("Exiting...")
 }

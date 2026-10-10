@@ -6,14 +6,14 @@ import (
 	"isllmalive/internal/status"
 )
 
-func TestAggregateComponentStatusesUsesExistingSeverityOrder(t *testing.T) {
+func TestAggregateComponentStatusesPreservesUncertainty(t *testing.T) {
 	tests := []struct {
 		name       string
 		components []ComponentStatus
 		want       status.Status
 	}{
 		{"all normal", []ComponentStatus{{Status: status.Normal}, {Status: status.Normal}}, status.Normal},
-		{"unknown below normal", []ComponentStatus{{Status: status.Unknown}, {Status: status.Normal}}, status.Normal},
+		{"unknown with normal", []ComponentStatus{{Status: status.Unknown}, {Status: status.Normal}}, status.Unknown},
 		{"degraded below outage", []ComponentStatus{{Status: status.Degraded}, {Status: status.Outage}}, status.Outage},
 	}
 

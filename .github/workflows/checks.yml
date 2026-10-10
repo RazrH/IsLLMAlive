@@ -1,0 +1,61 @@
+name: Checks
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+env:
+  GOFIPS140: v1.0.0
+  GODEBUG: fips140=off
+
+permissions:
+  contents: read
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Linux development dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y gcc pkg-config libgtk-3-dev libayatana-appindicator3-dev
+      - name: Format
+        shell: bash
+        run: |
+          git ls-files -z '*.go' | xargs -0 gofmt -l > format.txt
+          if [ -s format.txt ]; then cat format.txt; exit 1; fi
+      - name: Tests
+        run: go test -count=1 -mod=readonly ./...
+      - name: Windows sampling self-check
+        if: runner.os == 'Windows'
+        run: ./scripts/test-sampling.ps1
+      - name: Vet
+        run: go vet -mod=readonly ./...
+      - name: Module hygiene
+        run: go mod tidy -diff
+      - name: Vulnerability scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 -show verbose ./...
+      - name: Linux race
+        if: runner.os == 'Linux'
+        run: go test -race -count=1 -mod=readonly ./...
+      - name: Release build
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            CGO_ENABLED=0 go build -trimpath -mod=readonly -ldflags "-s -w -H=windowsgui" -o isllmalive.exe ./cmd/isllmalive
+          else
+            go build -trimpath -mod=readonly -ldflags "-s -w" -o isllmalive ./cmd/isllmalive
+          fi

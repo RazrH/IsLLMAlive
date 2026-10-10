@@ -290,3 +290,15 @@ The `deepseek` provider prefers `https://status.deepseek.com/feed.rss`. If the s
 Direct probes can infer `Normal`, `Outage`, or `Unknown`, but not reliable `Degraded`; RSS remains the preferred source.
 
 [Back to language links](#isllmalive)
+
+## Development baseline / 开发基线
+
+Use Go 1.27.0. Windows builds use CGO_ENABLED=0; Linux needs GTK3/AppIndicator development packages. Go 1.27 macOS builds require macOS 13 or later.
+
+使用 Go 1.27.0，先构建再运行。诊断菜单按需显示运行时内存、goroutine、每轮请求数及耗时。只有显式传入 `--profile-dir <目录>` 后，打开诊断时才写出 heap/allocs/goroutine pprof 文件；默认不开调试端口、不强制 GC。采样文件可能含敏感信息，不要公开上传。
+
+原常驻内存 <10MB 目标仍未达成；约40MB用户实测不是Go存活堆口径。
+
+Development and validation details: [DEVELOPMENT.md](DEVELOPMENT.md). 开发环境、可信度规则与验收记录见 [开发说明](DEVELOPMENT.md) 及 [上下文](CONTEXT.md)。
+
+Within one monitor, Normal + Unknown is Unknown; confirmed Degraded/Outage still wins. 同一监控内，只有全部所选组件有效且正常才显示正常；跨监控托盘严重度顺序不变。

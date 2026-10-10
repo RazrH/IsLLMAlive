@@ -37,7 +37,9 @@ func aggregateComponentStatuses(result MonitorResult, components []ComponentStat
 	result.ComponentStatuses = components
 	result.Status = status.Unknown
 	var abnormal []string
+	hasUnknown := len(components) == 0
 	for _, component := range components {
+		hasUnknown = hasUnknown || component.Status == status.Unknown
 		if component.Status > result.Status {
 			result.Status = component.Status
 		}
@@ -50,7 +52,17 @@ func aggregateComponentStatuses(result MonitorResult, components []ComponentStat
 		}
 	}
 
-	if len(components) == 1 {
+	if hasUnknown {
+		if result.Status == status.Normal {
+			result.Status = status.Unknown
+		}
+		if result.Err == nil {
+			result.Err = fmt.Errorf("one or more selected components are unavailable: %s", strings.Join(abnormal, "; "))
+		}
+	}
+	if len(components) == 0 {
+		result.Message = "No interpretable components"
+	} else if len(components) == 1 {
 		result.Message = components[0].Message
 	} else if len(abnormal) == 0 {
 		result.Message = "operational"

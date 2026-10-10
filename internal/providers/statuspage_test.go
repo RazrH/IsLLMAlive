@@ -1,7 +1,6 @@
 package providers
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -16,7 +15,7 @@ func TestStatuspageMultipleComponentsUseWorstStatus(t *testing.T) {
 	}))
 	defer server.Close()
 
-	got := (&StatuspageProvider{}).Fetch(context.Background(), config.MonitorConfig{
+	got := (&StatuspageProvider{}).Fetch(t.Context(), config.MonitorConfig{
 		Name: "Test", Endpoint: server.URL, Components: []string{"API", "Web", "Login", "Missing"},
 	})
 

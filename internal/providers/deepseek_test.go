@@ -139,7 +139,7 @@ func TestFetchDeepSeekRSSUsesChromeUserAgentInUTLSMode(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, _, err := fetchDeepSeekRSS(context.Background(), server.Client(), server.URL, "utls-chrome")
+	_, _, err := fetchDeepSeekRSS(t.Context(), server.Client(), server.URL, "utls-chrome")
 	if err != nil {
 		t.Fatalf("fetchDeepSeekRSS() error = %v", err)
 	}
@@ -164,7 +164,7 @@ func TestFallbackDeepSeekDirectProbeAPIComponentUsesAPIOnly(t *testing.T) {
 	defer webServer.Close()
 	withDeepSeekProbeURLs(t, apiServer.URL, webServer.URL)
 
-	got := fallbackDeepSeekDirectProbe(context.Background(), config.MonitorConfig{
+	got := fallbackDeepSeekDirectProbe(t.Context(), config.MonitorConfig{
 		Name:      "DeepSeek",
 		Component: "API Service",
 	}, deepSeekTestResult(), "rss failed", context.DeadlineExceeded)
@@ -197,7 +197,7 @@ func TestFallbackDeepSeekDirectProbePageLevelTakesWorstStatus(t *testing.T) {
 	defer webServer.Close()
 	withDeepSeekProbeURLs(t, apiServer.URL, webServer.URL)
 
-	got := fallbackDeepSeekDirectProbe(context.Background(), config.MonitorConfig{
+	got := fallbackDeepSeekDirectProbe(t.Context(), config.MonitorConfig{
 		Name:      "DeepSeek",
 		Component: "none",
 	}, deepSeekTestResult(), "rss failed", context.DeadlineExceeded)
@@ -217,7 +217,7 @@ func TestFallbackDeepSeekDirectProbeMultipleComponents(t *testing.T) {
 	defer webServer.Close()
 	withDeepSeekProbeURLs(t, apiServer.URL, webServer.URL)
 
-	got := fallbackDeepSeekDirectProbe(context.Background(), config.MonitorConfig{
+	got := fallbackDeepSeekDirectProbe(t.Context(), config.MonitorConfig{
 		Name: "DeepSeek", Components: []string{"API Service", "Web Chat Service"},
 	}, deepSeekTestResult(), "rss failed", context.DeadlineExceeded)
 
@@ -232,7 +232,7 @@ func TestDeepSeekRSSLive(t *testing.T) {
 	}
 
 	provider := &DeepSeekProvider{}
-	got := provider.Fetch(context.Background(), config.MonitorConfig{
+	got := provider.Fetch(t.Context(), config.MonitorConfig{
 		Name:     "DeepSeek",
 		Type:     "deepseek",
 		Endpoint: deepSeekDefaultFeedURL,

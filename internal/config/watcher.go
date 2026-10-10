@@ -1,69 +1,65 @@
 package config
 
 import (
-	"log"
-	"os"
-	"time"
-
+	"context"
 	"github.com/fsnotify/fsnotify"
+	"path/filepath"
+	"sync"
+	"time"
 )
 
-// Watch starts monitoring the specific config file for changes.
-func Watch(configPath string, onEvent func()) error {
+// Watch observes the parent directory so atomic replace saves do not lose the watch.
+func Watch(parent context.Context, path string, onEvent func(), onError func(error)) (func(), error) {
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		return err
+		return nil, err
 	}
-
-	err = watcher.Add(configPath)
-	if err != nil {
-		return err
+	if err := watcher.Add(filepath.Dir(path)); err != nil {
+		watcher.Close()
+		return nil, err
 	}
-
+	ctx, cancel := context.WithCancel(parent)
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		defer watcher.Close()
+		timer := time.NewTimer(time.Hour)
+		timer.Stop()
+		defer timer.Stop()
+		var ready <-chan time.Time
 		for {
 			select {
+			case <-ctx.Done():
+				return
 			case event, ok := <-watcher.Events:
 				if !ok {
 					return
 				}
-
-				// If the editor saves by deleting and replacing the file (atomic save),
-				// the watch on the original file is lost.
-				if event.Has(fsnotify.Remove) || event.Has(fsnotify.Rename) {
-					go func() {
-						// Poll until the file is recreated
-						for i := 0; i < 50; i++ {
-							time.Sleep(100 * time.Millisecond)
-							if _, err := os.Stat(configPath); err == nil {
-								// File exists again, re-add to watcher
-								_ = watcher.Add(configPath)
-								// Small delay to ensure file write finishes
-								time.Sleep(100 * time.Millisecond)
-								onEvent()
-								return
-							}
-						}
-						log.Println("Watcher lost config file permanently")
-					}()
+				if filepath.Clean(event.Name) != path {
 					continue
 				}
-
-				if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) {
-					// Small debounce delay
-					time.Sleep(100 * time.Millisecond)
-					onEvent()
+				if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) || event.Has(fsnotify.Remove) || event.Has(fsnotify.Rename) {
+					timer.Reset(100 * time.Millisecond)
+					ready = timer.C
 				}
-
+			case <-ready:
+				ready = nil
+				onEvent()
 			case err, ok := <-watcher.Errors:
 				if !ok {
 					return
 				}
-				log.Println("watcher error:", err)
+				if onError != nil {
+					onError(err)
+				}
 			}
 		}
 	}()
-
-	return nil
+	var once sync.Once
+	stop := func() { once.Do(cancel); <-done }
+	return stop, nil
 }

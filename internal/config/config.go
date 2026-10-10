@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -100,45 +101,99 @@ func DefaultConfig() *Config {
 
 // Load loads the config.json from the same directory as the executable.
 // If it doesn't exist, it creates one with the default configuration.
+func Path() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(exe), "config.json"), nil
+}
 func Load() (*Config, error) {
-	exePath, err := os.Executable()
+	path, err := Path()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get executable path: %w", err)
+		return nil, err
 	}
-
-	configDir := filepath.Dir(exePath)
-	configPath := filepath.Join(configDir, "config.json")
-
-	// Check if config exists
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		// File does not exist, create it with defaults
-		defaultCfg := DefaultConfig()
-		data, err := json.MarshalIndent(defaultCfg, "", "  ")
+	return LoadFile(path, true)
+}
+func Reload() (*Config, error) {
+	path, err := Path()
+	if err != nil {
+		return nil, err
+	}
+	return LoadFile(path, false)
+}
+func LoadFile(path string, create bool) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) && create {
+		cfg := DefaultConfig()
+		data, err = json.MarshalIndent(cfg, "", "  ")
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal default config: %w", err)
+			return nil, err
 		}
-
-		if err := os.WriteFile(configPath, data, 0644); err != nil {
-			return nil, fmt.Errorf("failed to write default config: %w", err)
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+		if os.IsExist(err) {
+			return LoadFile(path, false)
 		}
-
-		return defaultCfg, nil
-	} else if err != nil {
-		return nil, fmt.Errorf("failed to check config file: %w", err)
+		if err != nil {
+			return nil, err
+		}
+		_, writeErr := file.Write(data)
+		closeErr := file.Close()
+		if writeErr != nil {
+			return nil, writeErr
+		}
+		if closeErr != nil {
+			return nil, closeErr
+		}
+		return cfg, nil
 	}
-
-	// File exists, read and parse
-	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read config file: %w", err)
+		return nil, fmt.Errorf("read configuration: %w", err)
 	}
-
-	var cfg Config
+	var cfg *Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
+		return nil, fmt.Errorf("decode configuration: %w", err)
 	}
-
-	return &cfg, nil
+	if cfg == nil {
+		return nil, fmt.Errorf("configuration must be an object")
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+func (c *Config) Validate() error {
+	for i, m := range c.Monitors {
+		if !m.Enabled {
+			continue
+		}
+		if strings.TrimSpace(m.Name) == "" {
+			return fmt.Errorf("monitor %d: enabled monitor name is empty", i+1)
+		}
+		switch m.Type {
+		case "openai", "google", "deepseek", "statuspage", "apiget":
+		default:
+			return fmt.Errorf("monitor %d: unknown type %q", i+1, m.Type)
+		}
+		if m.Type == "statuspage" || m.Type == "apiget" || (m.Type == "deepseek" && m.Endpoint != "") {
+			if err := validateURL(m.Endpoint); err != nil {
+				return fmt.Errorf("monitor %d endpoint: %w", i+1, err)
+			}
+		}
+		if m.StatusPage != "" {
+			if err := validateURL(m.StatusPage); err != nil {
+				return fmt.Errorf("monitor %d status_page: %w", i+1, err)
+			}
+		}
+	}
+	return nil
+}
+func validateURL(value string) error {
+	u, err := url.Parse(value)
+	if err != nil || u.Hostname() == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil {
+		return fmt.Errorf("expected absolute HTTP(S) URL without credentials")
+	}
+	return nil
 }
 
 // Save writes the current configuration to config.json.

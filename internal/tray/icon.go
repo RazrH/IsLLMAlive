@@ -41,17 +41,17 @@ func GenerateIcon(hexColor string) ([]byte, error) {
 
 	// Wrap PNG inside an ICO container for Windows compatibility
 	var icoBuf bytes.Buffer
-	
+
 	// ICO Header (6 bytes)
 	// Reserved (2), Type (2) 1=ICO, Count (2)
 	icoBuf.Write([]byte{0, 0, 1, 0, 1, 0})
-	
+
 	// Directory Entry (16 bytes)
 	icoBuf.WriteByte(byte(size)) // Width
 	icoBuf.WriteByte(byte(size)) // Height
 	icoBuf.WriteByte(0)          // Color palette count
 	icoBuf.WriteByte(0)          // Reserved
-	
+
 	// Color planes (2 bytes)
 	binary.Write(&icoBuf, binary.LittleEndian, uint16(1))
 	// Bits per pixel (2 bytes)
@@ -60,7 +60,7 @@ func GenerateIcon(hexColor string) ([]byte, error) {
 	binary.Write(&icoBuf, binary.LittleEndian, uint32(len(pngData)))
 	// Image data offset (4 bytes)
 	binary.Write(&icoBuf, binary.LittleEndian, uint32(6+16))
-	
+
 	// Image data
 	icoBuf.Write(pngData)
 

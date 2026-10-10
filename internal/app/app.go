@@ -3,244 +3,344 @@ package app
 import (
 	"context"
 	"fmt"
-	"strings"
-	"sync"
-	"time"
-
 	"isllmalive/internal/config"
+	"isllmalive/internal/diagnostics"
 	"isllmalive/internal/notify"
 	"isllmalive/internal/providers"
 	"isllmalive/internal/status"
 	"isllmalive/internal/tray"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 )
 
-// App orchestrates the monitoring flow between Config, Providers, and Tray.
 type App struct {
-	cfg         *config.Config
-	mu          sync.Mutex
-	cancel      context.CancelFunc
-	lastStatus  map[string]status.Status
-	lastResults []providers.MonitorResult
+	closers          []func()
+	configPath       string
+	engine           *providers.Engine
+	mu               sync.Mutex
+	viewMu           sync.Mutex
+	cfg              *config.Config
+	ctx              context.Context
+	cancel           context.CancelFunc
+	roundCancel      context.CancelFunc
+	startOnce        sync.Once
+	wg               sync.WaitGroup
+	manual           chan struct{}
+	reload           chan struct{}
+	generation       uint64
+	notifications    *notify.Queue
+	lastStatus       map[string]status.Status
+	lastResults      []providers.MonitorResult
+	lastPollDuration time.Duration
+	lastPollRequests uint64
+	configError      string
+	fetch            func(context.Context, config.MonitorConfig) providers.MonitorResult
+	render           func([]providers.MonitorResult, string)
+	settings         func(*config.Config)
 }
 
-// New creates a new App instance.
+func cloneConfig(cfg *config.Config) *config.Config {
+	out := *cfg
+	out.Monitors = append([]config.MonitorConfig(nil), cfg.Monitors...)
+	for i := range out.Monitors {
+		out.Monitors[i].Components = append([]string(nil), cfg.Monitors[i].Components...)
+	}
+	return &out
+}
 func New(cfg *config.Config) *App {
-	return &App{
-		cfg:        cfg,
-		lastStatus: make(map[string]status.Status),
-	}
-}
-
-// Start initiates the background polling ticker and translates the menu.
-func (a *App) Start() {
-	a.mu.Lock()
-	lang := a.cfg.Language
-	globalNotify := a.cfg.GlobalNotifyOn
-	a.mu.Unlock()
-	tray.TranslateMenu(lang)
-	tray.UpdateToggleNotifyState(globalNotify, lang)
-
-	a.startPolling()
-}
-
-func (a *App) startPolling() {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	// Stop existing polling if any
-	if a.cancel != nil {
-		a.cancel()
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
-	a.cancel = cancel
-
-	interval := a.cfg.RefreshIntervalMinutes
-	if interval <= 0 {
-		interval = 10
+	a := &App{cfg: cloneConfig(cfg), ctx: ctx, cancel: cancel, manual: make(chan struct{}, 1), reload: make(chan struct{}, 1), lastStatus: make(map[string]status.Status), generation: 1}
+	a.engine = providers.NewEngine()
+	a.notifications = notify.NewQueue(ctx, notify.Send)
+	a.render = tray.Update
+	a.settings = func(c *config.Config) {
+		tray.TranslateMenu(c.Language)
+		tray.UpdateToggleNotifyState(c.GlobalNotifyOn, c.Language)
 	}
-
-	ticker := time.NewTicker(time.Duration(interval) * time.Minute)
-
-	// Trigger first poll
-	go a.PollAll()
-
-	go func() {
-		for {
-			select {
-			case <-ticker.C:
-				a.mu.Lock()
-				a.pollAllLocked()
-				a.mu.Unlock()
-			case <-ctx.Done():
-				ticker.Stop()
-				return
-			}
-		}
-	}()
+	return a
 }
-
-// ReloadConfig is called when the config file changes on disk.
-func (a *App) ReloadConfig() {
-	newCfg, err := config.Load()
-	if err != nil {
-		// Do not update a.cfg, but push an error state to the Tray
-		errRes := providers.MonitorResult{
-			Key:       "config_error",
-			Name:      "Config Error",
-			Status:    status.Outage,
-			Message:   fmt.Sprintf("Invalid JSON: %v", err),
-			CheckedAt: time.Now(),
+func (a *App) Start() {
+	a.startOnce.Do(func() {
+		a.mu.Lock()
+		if a.ctx.Err() != nil {
+			a.mu.Unlock()
+			return
 		}
-		// Render just the error in tray
-		tray.Update([]providers.MonitorResult{errRes}, "en-US") // fallback lang
+		a.wg.Add(1)
+		a.mu.Unlock()
+		a.viewMu.Lock()
+		a.mu.Lock()
+		cfg := cloneConfig(a.cfg)
+		a.mu.Unlock()
+		a.settings(cfg)
+		a.viewMu.Unlock()
+		go a.coordinate()
+	})
+}
+func (a *App) Stop() {
+	a.mu.Lock()
+	a.cancel()
+	if a.roundCancel != nil {
+		a.roundCancel()
+	}
+	closers := a.closers
+	a.closers = nil
+	a.mu.Unlock()
+	for _, close := range closers {
+		close()
+	}
+	a.notifications.Stop()
+	a.wg.Wait()
+	a.engine.Close()
+}
+func (a *App) StopNotifications() { a.notifications.Stop() }
+
+// PollAll schedules work without blocking the UI. Repeated requests merge.
+func (a *App) PollAll() {
+	select {
+	case a.manual <- struct{}{}:
+	default:
+	}
+}
+func (a *App) ReloadConfig() {
+	a.mu.Lock()
+	path := a.configPath
+	a.mu.Unlock()
+	var cfg *config.Config
+	var err error
+	if path == "" {
+		cfg, err = config.Reload()
+	} else {
+		cfg, err = config.LoadFile(path, false)
+	}
+	if err != nil {
+		a.reportConfigError(err)
 		return
 	}
-
+	a.applyConfig(cfg)
+}
+func (a *App) applyConfig(cfg *config.Config) {
+	a.viewMu.Lock()
+	defer a.viewMu.Unlock()
 	a.mu.Lock()
-	oldInterval := a.cfg.RefreshIntervalMinutes
-	a.cfg = newCfg
-	newInterval := a.cfg.RefreshIntervalMinutes
-	lang := a.cfg.Language
-	globalNotify := a.cfg.GlobalNotifyOn
+	if a.ctx.Err() != nil {
+		a.mu.Unlock()
+		return
+	}
+	a.generation++
+	if a.roundCancel != nil {
+		a.roundCancel()
+	}
+	a.reconcileLocked(cfg)
+	a.cfg = cloneConfig(cfg)
+	a.configError = ""
+	current := cloneConfig(a.cfg)
+	results := append([]providers.MonitorResult(nil), a.lastResults...)
 	a.mu.Unlock()
-
-	tray.TranslateMenu(lang)
-	tray.UpdateToggleNotifyState(globalNotify, lang)
-
-	if oldInterval != newInterval {
-		// Restart ticker with new interval
-		a.startPolling()
-	} else {
-		// Just poll immediately to reflect new config changes
-		a.PollAll()
+	a.notifications.Clear()
+	a.engine.Invalidate()
+	a.settings(current)
+	a.render(visibleResults(results), current.Language)
+	select {
+	case a.reload <- struct{}{}:
+	default:
 	}
 }
 
-// PollAll is exported for manual triggers (e.g. Refresh menu).
-func (a *App) PollAll() {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.pollAllLocked()
+type roundResult struct {
+	generation uint64
+	cfg        *config.Config
+	results    []providers.MonitorResult
+	duration   time.Duration
+	requests   uint64
 }
 
-// pollAllLocked concurrently fetches the status for all enabled monitors.
-func (a *App) pollAllLocked() {
+func interval(cfg *config.Config) time.Duration {
+	minutes := cfg.RefreshIntervalMinutes
+	if minutes <= 0 {
+		minutes = 10
+	}
+	return time.Duration(minutes) * time.Minute
+}
+func (a *App) coordinate() {
+	defer a.wg.Done()
+	completed := make(chan roundResult, 1)
+	a.mu.Lock()
+	period := interval(a.cfg)
+	a.mu.Unlock()
+	ticker := time.NewTicker(period)
+	defer ticker.Stop()
+	running, pending := false, false
+	start := func() {
+		a.mu.Lock()
+		cfg := cloneConfig(a.cfg)
+		version := a.generation
+		ctx, cancel := context.WithCancel(a.ctx)
+		a.roundCancel = cancel
+		a.mu.Unlock()
+		running = true
+		go func() { defer cancel(); completed <- a.fetchRound(ctx, cfg, version) }()
+	}
+	start()
+	for {
+		select {
+		case <-a.ctx.Done():
+			if running {
+				<-completed
+			}
+			return
+		case <-a.manual:
+			if running {
+				pending = true
+			} else {
+				start()
+			}
+		case <-a.reload:
+			a.mu.Lock()
+			period = interval(a.cfg)
+			a.mu.Unlock()
+			ticker.Reset(period)
+			if running {
+				pending = true
+			} else {
+				start()
+			}
+		case <-ticker.C:
+			if !running {
+				start()
+			}
+		case round := <-completed:
+			running = false
+			a.publish(round)
+			if pending {
+				select {
+				case <-a.manual:
+				default:
+				}
+				pending = false
+				start()
+			}
+		}
+	}
+}
+func (a *App) fetchRound(ctx context.Context, cfg *config.Config, version uint64) roundResult {
+	started := time.Now()
+	var requests atomic.Uint64
+	parent := providers.WithRequestCounter(ctx, &requests)
+	round := a.engine.NewRound(parent, cfg.Monitors)
+	fetch := a.fetch
+	if fetch == nil {
+		fetch = round.Fetch
+	}
+	results := make([]providers.MonitorResult, len(cfg.Monitors))
+	keys := providers.MonitorKeys(cfg.Monitors)
 	var wg sync.WaitGroup
-
-	// Create a slice with the exact length of configured monitors to preserve ordering
-	results := make([]providers.MonitorResult, len(a.cfg.Monitors))
-
-	for i, m := range a.cfg.Monitors {
+	for i, m := range cfg.Monitors {
 		if !m.Enabled {
 			continue
 		}
-
-		prov := providers.NewProvider(m.Type)
-		if prov == nil {
+		wg.Go(func() {
+			child, cancel := context.WithTimeout(parent, 15*time.Second)
+			defer cancel()
+			results[i] = providers.CompleteResult(m, keys[i], fetch(child, m))
+		})
+	}
+	wg.Wait()
+	return roundResult{version, cfg, results, time.Since(started), requests.Load()}
+}
+func visibleResults(results []providers.MonitorResult) []providers.MonitorResult {
+	out := make([]providers.MonitorResult, 0, len(results))
+	for _, r := range results {
+		if r.Name != "" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+func (a *App) publish(round roundResult) {
+	a.viewMu.Lock()
+	defer a.viewMu.Unlock()
+	a.mu.Lock()
+	if a.ctx.Err() != nil || round.generation != a.generation {
+		a.mu.Unlock()
+		return
+	}
+	a.lastResults = round.results
+	a.lastPollDuration = round.duration
+	a.lastPollRequests = round.requests
+	var messages []notify.Message
+	for i, r := range round.results {
+		if r.Name == "" {
 			continue
 		}
-
-		wg.Add(1)
-		go func(idx int, monitor config.MonitorConfig, p providers.Provider) {
-			defer wg.Done()
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			defer cancel()
-			res := p.Fetch(ctx, monitor)
-			res.Type = monitor.Type
-			res.Endpoint = monitor.Endpoint
-			res.Component = monitor.Component
-			res.Components = monitor.ComponentNames()
-			res.StatusPage = resolveStatusPage(monitor, res.StatusPage)
-
-			results[idx] = res
-		}(i, m, prov)
-	}
-
-	wg.Wait()
-	a.lastResults = append(a.lastResults[:0], results...)
-
-	// Filter out empty results (from disabled or unknown providers)
-	var finalResults []providers.MonitorResult
-	for i, res := range results {
-		if res.Name != "" {
-			finalResults = append(finalResults, res)
-
-			// Notification Logic
-			monitor := a.cfg.Monitors[i]
-			prev, exists := a.lastStatus[res.Key]
-
-			// Unknown and Normal are treated equally in cross-level checks
-			effPrev := prev
-			if effPrev == status.Unknown {
-				effPrev = status.Normal
-			}
-			effCurr := res.Status
-			if effCurr == status.Unknown {
-				effCurr = status.Normal
-			}
-
-			if exists && effPrev != effCurr {
-				// Cross-level change detected (since Normal/Unknown are same, any difference here is cross-level)
-				if a.cfg.GlobalNotifyOn && monitor.NotifyOn {
-					title := fmt.Sprintf("IsLLMAlive: %s", res.Name)
-					var message string
-
-					isZh := false
-					if len(a.cfg.Language) >= 2 && (a.cfg.Language[:2] == "zh" || a.cfg.Language[:2] == "Zh") {
-						isZh = true
-					}
-
-					// Build status string
-					statusStr := res.Status.String()
-					if isZh {
-						switch res.Status {
-						case status.Normal:
-							statusStr = "已恢复正常"
-						case status.Degraded:
-							statusStr = "服务降级"
-						case status.Outage:
-							statusStr = "服务宕机"
-						case status.Unknown:
-							statusStr = "状态未知"
-						}
-					} else {
-						switch res.Status {
-						case status.Normal:
-							statusStr = "Recovered (Normal)"
-						case status.Degraded:
-							statusStr = "Degraded"
-						case status.Outage:
-							statusStr = "Outage"
-						case status.Unknown:
-							statusStr = "Unknown"
-						}
-					}
-
-					if res.Message != "" {
-						message = fmt.Sprintf("Status: %s\nDetail: %s", statusStr, res.Message)
-					} else {
-						message = fmt.Sprintf("Status: %s", statusStr)
-					}
-
-					_ = notify.Send(title, message)
-				}
-			}
-
-			// Save last status
-			a.lastStatus[res.Key] = res.Status
+		prev, exists := a.lastStatus[r.Key]
+		before, after := prev, r.Status
+		if before == status.Unknown {
+			before = status.Normal
 		}
+		if after == status.Unknown {
+			after = status.Normal
+		}
+		if exists && before != after && a.cfg.GlobalNotifyOn && round.cfg.Monitors[i].NotifyOn {
+			messages = append(messages, notification(r, a.cfg.Language))
+		}
+		a.lastStatus[r.Key] = r.Status
 	}
-
-	// tray.Update() handles showing/hiding dynamically, so we don't need to recreate the menu.
-	tray.Update(finalResults, a.cfg.Language)
+	lang := a.cfg.Language
+	configError := a.configError
+	a.mu.Unlock()
+	for _, m := range messages {
+		a.notifications.Enqueue(m)
+	}
+	a.render(withConfigError(visibleResults(round.results), configError), lang)
 }
-
-func resolveStatusPage(monitor config.MonitorConfig, providerStatusPage string) string {
-	if monitor.StatusPage != "" {
-		return monitor.StatusPage
+func notification(r providers.MonitorResult, lang string) notify.Message {
+	label := r.Status.String()
+	if strings.HasPrefix(strings.ToLower(lang), "zh") {
+		switch r.Status {
+		case status.Normal:
+			label = "已恢复正常"
+		case status.Degraded:
+			label = "服务降级"
+		case status.Outage:
+			label = "服务宕机"
+		case status.Unknown:
+			label = "状态未知"
+		}
+	} else if r.Status == status.Normal {
+		label = "Recovered (Normal)"
 	}
-	return providerStatusPage
+	body := "Status: " + label
+	if r.Message != "" {
+		body += "\nDetail: " + r.Message
+	}
+	return notify.Message{Key: r.Key, Title: "IsLLMAlive: " + r.Name, Body: body}
+}
+func resolveStatusPage(m config.MonitorConfig, page string) string {
+	if m.StatusPage != "" {
+		return m.StatusPage
+	}
+	return page
+}
+func (a *App) ToggleNotify() {
+	a.viewMu.Lock()
+	defer a.viewMu.Unlock()
+	a.mu.Lock()
+	next := cloneConfig(a.cfg)
+	next.GlobalNotifyOn = !next.GlobalNotifyOn
+	a.cfg = next
+	a.mu.Unlock()
+	if !next.GlobalNotifyOn {
+		a.notifications.Clear()
+	}
+	if err := next.Save(); err != nil {
+		a.mu.Lock()
+		a.configError = err.Error()
+		a.mu.Unlock()
+	}
+	a.settings(next)
 }
 
 // Diagnostics returns a text snapshot of the current config and latest poll results.
@@ -250,6 +350,10 @@ func (a *App) Diagnostics() string {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "IsLLMAlive diagnostics\n")
+	b.WriteString(diagnostics.RuntimeSummary())
+	fmt.Fprintf(&b, "Configuration error: %s\n", a.configError)
+	fmt.Fprintf(&b, "Last notification error: %s\n", a.notifications.LastError())
+	fmt.Fprintf(&b, "Last poll duration: %s\nLast poll HTTP requests: %d\n", a.lastPollDuration, a.lastPollRequests)
 	fmt.Fprintf(&b, "Generated: %s\n", time.Now().Format(time.RFC3339))
 	fmt.Fprintf(&b, "Language: %s\n", a.cfg.Language)
 	fmt.Fprintf(&b, "Refresh interval minutes: %d\n", a.cfg.RefreshIntervalMinutes)
@@ -296,18 +400,66 @@ func (a *App) Diagnostics() string {
 	return b.String()
 }
 
-// ToggleNotify flips the global notification toggle and saves the config.
-func (a *App) ToggleNotify() {
-	a.mu.Lock()
-	a.cfg.GlobalNotifyOn = !a.cfg.GlobalNotifyOn
-	newVal := a.cfg.GlobalNotifyOn
-	lang := a.cfg.Language
-	err := a.cfg.Save()
-	a.mu.Unlock()
-
-	if err != nil {
-		fmt.Printf("Failed to save config on toggle: %v\n", err)
+func (a *App) reconcileLocked(cfg *config.Config) {
+	keys := providers.MonitorKeys(cfg.Monitors)
+	previous := make(map[string]providers.MonitorResult, len(a.lastResults))
+	for _, r := range a.lastResults {
+		previous[r.Key] = r
 	}
+	next := make([]providers.MonitorResult, len(keys))
+	statuses := make(map[string]status.Status, len(keys))
+	for i, key := range keys {
+		if !cfg.Monitors[i].Enabled {
+			continue
+		}
+		if old, ok := previous[key]; ok {
+			next[i] = providers.CompleteResult(cfg.Monitors[i], key, old)
+		}
+		if old, ok := a.lastStatus[key]; ok {
+			statuses[key] = old
+		}
+	}
+	a.lastResults = next
+	a.lastStatus = statuses
+}
 
-	tray.UpdateToggleNotifyState(newVal, lang)
+func (a *App) WatchConfig(path string) error {
+	stop, err := config.Watch(a.ctx, path, a.ReloadConfig, a.reportConfigError)
+	if err != nil {
+		a.mu.Lock()
+		a.configError = err.Error()
+		a.mu.Unlock()
+		return err
+	}
+	a.mu.Lock()
+	a.configPath = path
+	if a.ctx.Err() != nil {
+		a.mu.Unlock()
+		stop()
+		return a.ctx.Err()
+	}
+	a.closers = append(a.closers, stop)
+	a.mu.Unlock()
+	return nil
+}
+
+func withConfigError(results []providers.MonitorResult, message string) []providers.MonitorResult {
+	if message != "" {
+		results = append(results, providers.MonitorResult{Key: "configuration-error", Name: "Config Error", Status: status.Unknown, Message: message, CheckedAt: time.Now()})
+	}
+	return results
+}
+func (a *App) reportConfigError(err error) {
+	a.viewMu.Lock()
+	defer a.viewMu.Unlock()
+	a.mu.Lock()
+	if a.ctx.Err() != nil {
+		a.mu.Unlock()
+		return
+	}
+	a.configError = err.Error()
+	results := visibleResults(a.lastResults)
+	lang := a.cfg.Language
+	a.mu.Unlock()
+	a.render(withConfigError(results, err.Error()), lang)
 }

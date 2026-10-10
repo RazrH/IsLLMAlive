@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 
 	"isllmalive/internal/providers"
 	"isllmalive/internal/status"
@@ -13,6 +14,11 @@ import (
 )
 
 var (
+	lastIconColor   string
+	updateMu        sync.Mutex
+	urlsMu          sync.RWMutex
+	done            = make(chan struct{})
+	stopOnce        sync.Once
 	monitorItems    []*systray.MenuItem
 	monitorUrls     = make([]string, 20) // store URLs for the 20 slots
 	btnRefresh      *systray.MenuItem
@@ -49,8 +55,18 @@ func SetupMenu(onRefresh, onToggleNotify, onConfig, onDiagnostics, onQuit func()
 
 		// Spawn a goroutine to handle clicks for this specific index
 		go func(idx int, it *systray.MenuItem) {
-			for range it.ClickedCh {
+			for {
+				select {
+				case <-done:
+					return
+				case _, ok := <-it.ClickedCh:
+					if !ok {
+						return
+					}
+				}
+				urlsMu.RLock()
 				url := monitorUrls[idx]
+				urlsMu.RUnlock()
 				if url != "" {
 					openBrowser(url)
 				}
@@ -69,6 +85,8 @@ func SetupMenu(onRefresh, onToggleNotify, onConfig, onDiagnostics, onQuit func()
 	go func() {
 		for {
 			select {
+			case <-done:
+				return
 			case <-btnRefresh.ClickedCh:
 				if OnRefresh != nil {
 					OnRefresh()
@@ -90,6 +108,7 @@ func SetupMenu(onRefresh, onToggleNotify, onConfig, onDiagnostics, onQuit func()
 					OnQuit()
 				}
 				systray.Quit()
+				return
 			}
 		}
 	}()
@@ -115,6 +134,8 @@ func openBrowser(url string) {
 
 // TranslateMenu updates the static menu items based on language.
 func TranslateMenu(lang string) {
+	updateMu.Lock()
+	defer updateMu.Unlock()
 	if btnRefresh == nil {
 		return
 	}
@@ -133,6 +154,8 @@ func TranslateMenu(lang string) {
 
 // UpdateToggleNotifyState updates the state of the toggle notification button.
 func UpdateToggleNotifyState(enabled bool, lang string) {
+	updateMu.Lock()
+	defer updateMu.Unlock()
 	if btnToggleNotify == nil {
 		return
 	}
@@ -171,6 +194,8 @@ func translateStatus(s status.Status, lang string) string {
 
 // Update refreshes the tray icon, tooltip, and menu items based on current results.
 func Update(results []providers.MonitorResult, lang string) {
+	updateMu.Lock()
+	defer updateMu.Unlock()
 	maxSeverity := status.Unknown
 	for _, res := range results {
 		if res.Status > maxSeverity {
@@ -188,9 +213,12 @@ func Update(results []providers.MonitorResult, lang string) {
 		colorHex = "#D50000"
 	}
 
-	iconBytes, err := GenerateIcon(colorHex)
-	if err == nil {
-		systray.SetIcon(iconBytes)
+	if lastIconColor != colorHex {
+		iconBytes, err := cachedIcon(colorHex)
+		if err == nil {
+			systray.SetIcon(iconBytes)
+			lastIconColor = colorHex
+		}
 	}
 
 	var anomalyMsgs []string
@@ -224,11 +252,15 @@ func Update(results []providers.MonitorResult, lang string) {
 			}
 			item.SetTitle(fmt.Sprintf("%s %s: %s", emoji, res.Name, translateStatus(res.Status, lang)))
 			item.SetTooltip(monitorTooltip(res, lang))
+			urlsMu.Lock()
 			monitorUrls[i] = res.StatusPage
+			urlsMu.Unlock()
 			item.Show()
 		} else {
 			item.SetTooltip("")
+			urlsMu.Lock()
 			monitorUrls[i] = ""
+			urlsMu.Unlock()
 			item.Hide()
 		}
 	}
@@ -296,3 +328,6 @@ func monitorTooltip(res providers.MonitorResult, lang string) string {
 	}
 	return strings.Join(lines, "\n")
 }
+
+// Stop releases menu click workers; it is safe to call more than once.
+func Stop() { stopOnce.Do(func() { close(done) }) }
